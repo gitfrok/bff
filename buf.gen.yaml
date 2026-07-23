@@ -1,0 +1,17 @@
+version: v2
+# BFF generates Go clients from governance/contracts into its own gen/ tree.
+# Managed mode pins the go_package prefix under the bff module path.
+managed:
+  enabled: true
+  override:
+    - file_option: go_package_prefix
+      value: github.com/gitfrok/bff/gen
+inputs:
+  - directory: ../governance/contracts
+plugins:
+  - local: protoc-gen-go
+    out: gen
+    opt: paths=source_relative
+  - local: protoc-gen-go-grpc
+    out: gen
+    opt: paths=source_relative
