@@ -1,0 +1,7 @@
+// Fixture for T-0002 AC3: the BFF must not import a backend module's internal/* — it calls
+// backend over gRPC using the generated contracts (invariants 18, 22).
+package handler
+
+import (
+	_ "github.com/gitfrok/backend/modules/repository/internal/domain"
+)
