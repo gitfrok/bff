@@ -1,0 +1,7 @@
+// Fixture for T-0002 AC3: repo-level backend internals are just as forbidden as a module's —
+// backend/internal/* is not a BFF dependency either (invariants 18, 22).
+package handler
+
+import (
+	_ "github.com/gitfrok/backend/internal/arch"
+)

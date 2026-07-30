@@ -1,0 +1,8 @@
+// Fixture for invariant 22: even a backend module's *public* api/ package is off limits to the
+// BFF. In-process api/ is for other backend modules; cross-process traffic goes over gRPC using
+// governance/contracts/ (ADR-0027). This must fail as a plain backend import.
+package handler
+
+import (
+	_ "github.com/gitfrok/backend/modules/repository/api"
+)

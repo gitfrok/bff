@@ -1,0 +1,17 @@
+// Fixture guarding against false positives: the legitimate BFF shape — standard library, gRPC as
+// a transport, and this repo's own generated contracts. No violations expected.
+package handler
+
+import (
+	"context"
+
+	"google.golang.org/grpc"
+
+	agentv1 "github.com/gitfrok/bff/gen/proto/agent/v1"
+)
+
+func Health(ctx context.Context, conn *grpc.ClientConn) agentv1.HealthState {
+	_ = ctx
+	_ = conn
+	return agentv1.HealthState_HEALTHY
+}
