@@ -1,0 +1,10 @@
+// Fixture: reaching the shared datastore sideways. A cache client is not a SQL driver, but reading
+// another context's keys out of Valkey is the same violation of invariant 15 with a different
+// protocol — and the same bypass of the PDP.
+package handler
+
+import "github.com/valkey-io/valkey-go"
+
+func Client(addr string) (valkey.Client, error) {
+	return valkey.NewClient(valkey.ClientOption{InitAddress: []string{addr}})
+}

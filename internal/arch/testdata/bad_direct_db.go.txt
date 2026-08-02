@@ -1,0 +1,16 @@
+// Fixture: the BFF opening its own database connection. Forbidden by invariant 15 and this repo's
+// AGENTS.md — data belongs to the context that owns it, and the BFF reaches it over gRPC. A direct
+// query here also bypasses RLS and the PDP, so it breaks tenancy and authorization at once
+// (invariants 1, 2).
+package handler
+
+import (
+	"context"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+func Repositories(ctx context.Context, pool *pgxpool.Pool) error {
+	_, err := pool.Query(ctx, "select id from repositories")
+	return err
+}

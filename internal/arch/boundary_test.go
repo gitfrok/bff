@@ -96,6 +96,21 @@ func TestForbiddenEdgesAreRejected(t *testing.T) {
 			fixture: "bad_backend_api.go.txt",
 			want:    []string{RuleBackendImport},
 		},
+		{
+			name:    "direct SQL through a driver",
+			fixture: "bad_direct_db.go.txt",
+			want:    []string{RuleDirectDataStore},
+		},
+		{
+			name:    "direct SQL through the standard library",
+			fixture: "bad_database_sql.go.txt",
+			want:    []string{RuleDirectDataStore},
+		},
+		{
+			name:    "reaching the shared cache sideways",
+			fixture: "bad_valkey_cache.go.txt",
+			want:    []string{RuleDirectDataStore},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -121,6 +136,23 @@ func TestLegitimateCodeIsAccepted(t *testing.T) {
 	}
 	if len(vs) != 0 {
 		t.Errorf("expected no violations, got %v", vs)
+	}
+}
+
+// TestGRPCIsNotADataStore pins the line the datastore rule must not cross: gRPC is the sanctioned
+// transport to backend, so a checker that flagged it would forbid the BFF's whole job.
+func TestGRPCIsNotADataStore(t *testing.T) {
+	allowed := []string{
+		"google.golang.org/grpc",
+		"google.golang.org/protobuf/proto",
+		"github.com/gitfrok/bff/gen/proto/agent/v1",
+		"net/http",
+		"context",
+	}
+	for _, imp := range allowed {
+		if isDataStore(imp) {
+			t.Errorf("%q must not be treated as a datastore", imp)
+		}
 	}
 }
 

@@ -1,0 +1,9 @@
+// Fixture: the same violation through the standard library rather than a driver. database/sql is
+// the import a "just one quick query" change reaches for first, so the rule has to name it.
+package handler
+
+import "database/sql"
+
+func Open(dsn string) (*sql.DB, error) {
+	return sql.Open("postgres", dsn)
+}
