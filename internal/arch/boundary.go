@@ -24,7 +24,27 @@ const (
 	// RuleBackendImport fires on any import of the backend Go module. The BFF talks to backend
 	// over gRPC only; a compile-time edge in either direction violates invariant 22.
 	RuleBackendImport = "bff-imports-backend"
+	// RuleDirectDataStore fires when the BFF opens a datastore itself. T-0002 deferred this rule
+	// to T-0009 rather than widening its own criteria; it lands here.
+	RuleDirectDataStore = "bff-direct-datastore"
 )
+
+// dataStoreMarkers are import substrings that mean this process is talking to a datastore.
+//
+// The BFF has no data of its own: every context owns its schema and is reached through its API
+// (invariant 15). A query from here would also run outside RLS and without a PDP decision, so one
+// convenient join breaks tenancy and authorization at the same time (invariants 1, 2) — and it
+// would do so in the one component with no domain layer to notice.
+//
+// Cache and message clients are listed alongside SQL drivers deliberately: reading another
+// context's state out of Valkey or consuming its topic directly is the same coupling wearing a
+// different protocol. gRPC is absent because that is the sanctioned transport.
+var dataStoreMarkers = []string{
+	"database/sql", "jackc/pgx", "lib/pq", "go-sql-driver/mysql", "mattn/go-sqlite3",
+	"jmoiron/sqlx", "gorm.io", "ent.io", "uptrace/bun",
+	"valkey-io/valkey-go", "redis/go-redis", "gomodule/redigo",
+	"twmb/franz-go", "confluentinc/confluent-kafka-go", "segmentio/kafka-go",
+}
 
 var backendInternalRe = regexp.MustCompile(
 	`^` + regexp.QuoteMeta(BackendModulePath) + `/(modules/[^/]+/)?internal(/|$)`)
@@ -57,6 +77,9 @@ func importsOf(fset *token.FileSet, path string) ([]string, error) {
 func checkFile(file string, imports []string) []Violation {
 	var vs []Violation
 	for _, imp := range imports {
+		if isDataStore(imp) {
+			vs = append(vs, Violation{File: file, Import: imp, Rule: RuleDirectDataStore})
+		}
 		if !isBackendImport(imp) {
 			continue
 		}
@@ -68,6 +91,16 @@ func checkFile(file string, imports []string) []Violation {
 		vs = append(vs, Violation{File: file, Import: imp, Rule: RuleBackendImport})
 	}
 	return vs
+}
+
+// isDataStore reports whether an import path opens a datastore connection.
+func isDataStore(imp string) bool {
+	for _, marker := range dataStoreMarkers {
+		if strings.Contains(imp, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // isBackendImport reports whether an import path resolves into the backend Go module. The trailing
