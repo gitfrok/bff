@@ -10,6 +10,6 @@ import (
 
 func main() {
 	// Generated contract wired in to prove codegen composes in this module (T-0001 AC3/AC4).
-	_ = agentv1.HealthState_HEALTHY
+	_ = agentv1.HealthState_HEALTH_STATE_HEALTHY
 	fmt.Println("gitfrok bff: baseline (T-0001)")
 }
