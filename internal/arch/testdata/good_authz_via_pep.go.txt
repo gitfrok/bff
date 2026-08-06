@@ -1,0 +1,16 @@
+package fixture
+
+import "context"
+
+// The sanctioned shape: ask, then act. It names no role and decides nothing.
+type decisionPoint interface {
+	Decide(ctx context.Context, action string) (bool, error)
+}
+
+func readRepo(ctx context.Context, pdp decisionPoint) error {
+	allowed, err := pdp.Decide(ctx, "repo.read")
+	if err != nil || !allowed {
+		return errDenied
+	}
+	return nil
+}

@@ -1,0 +1,10 @@
+package fixture
+
+// The escape hatch used as intended: a display label, not a decision.
+func roleLabel(role string) string {
+	//arch:allow-inline-authz renders a display label, grants no access
+	if role == "owner" {
+		return "Owner"
+	}
+	return role
+}

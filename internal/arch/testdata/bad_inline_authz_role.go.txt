@@ -1,0 +1,7 @@
+package fixture
+
+// "The frontend just needs to know whether this user is an owner." It is still an authorization
+// decision, and it is the grant table in governance/policies reimplemented one branch at a time.
+func showAdminTab(role string) bool {
+	return role == "owner"
+}
