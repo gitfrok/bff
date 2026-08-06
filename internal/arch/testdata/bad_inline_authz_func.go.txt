@@ -1,0 +1,14 @@
+package fixture
+
+// A shaping helper that decides access. The name says what it is, whatever the body does — and in
+// the BFF there is no correct version of this: ask the PDP through internal/pep.
+type viewer struct{ roles []string }
+
+func hasPermission(v viewer, action string) bool {
+	for _, r := range v.roles {
+		if r == action {
+			return true
+		}
+	}
+	return false
+}
