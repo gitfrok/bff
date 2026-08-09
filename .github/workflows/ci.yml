@@ -51,6 +51,10 @@ jobs:
       - name: go test
         run: go test ./...
 
+      # T-0021 / ADR-0035: build and assert the scratch, non-root, no-shell BFF image.
+      - name: container image
+        run: bash scripts/test-container-image.sh
+
       # SPEC-0012: the ceremony tier a PR declares must match what its diff does. Only meaningful
       # on a pull request — a push to main carries no declaration, and inventing one is not the
       # gate's business. The script is generated from governance canonical/agent-surfaces/
