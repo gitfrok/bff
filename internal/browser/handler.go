@@ -282,7 +282,7 @@ func repositoryPath(decoded string) (string, bool) {
 		strings.Contains(decoded, "//") || len(decoded) > 4096 {
 		return "", false
 	}
-	for _, segment := range strings.Split(decoded, "/") {
+	for segment := range strings.SplitSeq(decoded, "/") {
 		if segment == "." || segment == ".." {
 			return "", false
 		}
