@@ -38,12 +38,15 @@ type MergeRequests interface {
 // Handler serves the minimal MR surface.
 type Handler struct {
 	client  MergeRequests
+	imports ImportedHistory
 	session Session
 }
 
-// New wires the handler onto the codereview client.
-func New(client MergeRequests, session Session) *Handler {
-	return &Handler{client: client, session: session}
+// New wires the handler onto the codereview client. A nil imports port means
+// this deployment serves no imported history, and the route refuses rather than
+// returning an empty page a reader could mistake for "this import has none".
+func New(client MergeRequests, imports ImportedHistory, session Session) *Handler {
+	return &Handler{client: client, imports: imports, session: session}
 }
 
 // MRView is the JSON shape the web page consumes. It carries only review
@@ -69,6 +72,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests", h.create)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", h.review)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", h.merge)
+	mux.HandleFunc("GET /v1/repositories/{repository_id}/imports/{import_id}/history", h.importedHistory)
 	return mux
 }
 
