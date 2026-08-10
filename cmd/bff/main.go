@@ -149,12 +149,11 @@ func main() {
 		Handler:           mux,
 		ReadHeaderTimeout: 10 * time.Second,
 	}
-	go func() {
-		<-ctx.Done()
+	context.AfterFunc(ctx, func() {
 		shutdown, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		_ = server.Shutdown(shutdown)
-	}()
+	})
 
 	fmt.Printf("gitfrok bff: PDP on %s, RepositoryReader on %s, serving %s\n", pdpAddr, readerAddr, listenAddr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

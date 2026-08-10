@@ -42,7 +42,7 @@ func TestClientMapsRepositoryReaderWithoutDerivation(t *testing.T) {
 	client := New(repositoryv1.NewRepositoryReaderClient(conn))
 	read := aggregate.ReadContext{TenantID: "tenant-a", RepositoryID: "repo-a", ActorID: "actor-a", RequestID: "request-a"}
 
-	tree, err := client.Tree(context.Background(), read, "main", "", 100)
+	tree, err := client.Tree(t.Context(), read, "main", "", 100)
 	if err != nil || len(tree.Entries) != 1 || tree.Entries[0].Kind != aggregate.EntryFile || tree.NextPageToken != "opaque" {
 		t.Fatalf("tree=%+v err=%v", tree, err)
 	}
@@ -50,14 +50,14 @@ func TestClientMapsRepositoryReaderWithoutDerivation(t *testing.T) {
 		t.Fatalf("context=%+v want=%+v", got, read)
 	}
 	var file []byte
-	if err := client.File(context.Background(), read, "main", "README.md", func(chunk aggregate.FileChunk) error { file = append(file, chunk.Data...); return nil }); err != nil {
+	if err := client.File(t.Context(), read, "main", "README.md", func(chunk aggregate.FileChunk) error { file = append(file, chunk.Data...); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if string(file) != "content" {
 		t.Fatalf("file=%q", file)
 	}
 	var diff []byte
-	if err := client.Diff(context.Background(), read, "base", "head", "", func(chunk aggregate.DiffChunk) error { diff = append(diff, chunk.Data...); return nil }); err != nil {
+	if err := client.Diff(t.Context(), read, "base", "head", "", func(chunk aggregate.DiffChunk) error { diff = append(diff, chunk.Data...); return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if string(diff) != "patch" {

@@ -18,7 +18,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"sort"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -256,7 +256,7 @@ func cacheKey(req Request) string {
 	for k := range req.Context {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	write(strconv.Itoa(len(keys)))
 	for _, k := range keys {
 		write(k)

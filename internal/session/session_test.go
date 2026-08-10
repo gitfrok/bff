@@ -1,7 +1,6 @@
 package session
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -17,7 +16,7 @@ func TestBeginAndLoadRoundTrip(t *testing.T) {
 	manager := NewManager(store)
 	read := aggregate.ReadContext{TenantID: "tenant-a", ActorID: "actor-a", RequestID: "request-a", ActorRoles: []string{"reader"}}
 
-	id, err := manager.Begin(context.Background(), read)
+	id, err := manager.Begin(t.Context(), read)
 	if err != nil {
 		t.Fatalf("Begin: %v", err)
 	}
@@ -59,14 +58,14 @@ func TestNoSessionIsRefused(t *testing.T) {
 func TestRevokeDeletesImmediately(t *testing.T) {
 	store := NewMemory()
 	manager := NewManager(store)
-	id, err := manager.Begin(context.Background(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"})
+	id, err := manager.Begin(t.Context(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := manager.Revoke(context.Background(), id); err != nil {
+	if err := manager.Revoke(t.Context(), id); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Load(context.Background(), id); err != ErrNoSession {
+	if _, err := store.Load(t.Context(), id); err != ErrNoSession {
 		t.Fatalf("Load after Revoke = %v, want ErrNoSession", err)
 	}
 }
@@ -75,7 +74,7 @@ func TestRevokeDeletesImmediately(t *testing.T) {
 func TestExpiryRefuses(t *testing.T) {
 	store := NewMemory()
 	manager := NewManager(store)
-	id, err := manager.Begin(context.Background(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"})
+	id, err := manager.Begin(t.Context(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"})
 	if err != nil {
 		t.Fatal(err)
 	}

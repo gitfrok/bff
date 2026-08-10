@@ -41,7 +41,7 @@ func TestUnknownProvenanceClassIsNeverFirstParty(t *testing.T) {
 			Provenance:     &contractsv1.Provenance{Class: contractsv1.Provenance_CLASS_UNSPECIFIED},
 		}},
 	}}
-	page, err := NewImportClient(service).ListImportedHistory(context.Background(), read(), "import-1", 0, "")
+	page, err := NewImportClient(service).ListImportedHistory(t.Context(), read(), "import-1", 0, "")
 	if err != nil {
 		t.Fatalf("list = %v", err)
 	}
@@ -56,7 +56,7 @@ func TestMissingProvenanceBlockIsUnspecified(t *testing.T) {
 	service := &stubImportService{response: &codereviewv1.ListImportedHistoryResponse{
 		MergeRequests: []*codereviewv1.ImportedMergeRequest{{MergeRequestId: "imported-1"}},
 	}}
-	page, err := NewImportClient(service).ListImportedHistory(context.Background(), read(), "import-1", 0, "")
+	page, err := NewImportClient(service).ListImportedHistory(t.Context(), read(), "import-1", 0, "")
 	if err != nil {
 		t.Fatalf("list = %v", err)
 	}
@@ -77,7 +77,7 @@ func TestUnknownAnchorIsNeverDiff(t *testing.T) {
 			}},
 		}},
 	}}
-	page, err := NewImportClient(service).ListImportedHistory(context.Background(), read(), "import-1", 0, "")
+	page, err := NewImportClient(service).ListImportedHistory(t.Context(), read(), "import-1", 0, "")
 	if err != nil {
 		t.Fatalf("list = %v", err)
 	}
@@ -89,7 +89,7 @@ func TestUnknownAnchorIsNeverDiff(t *testing.T) {
 // The verified identity travels to the backend; nothing else is asserted.
 func TestRequestCarriesTheVerifiedContext(t *testing.T) {
 	service := &stubImportService{response: &codereviewv1.ListImportedHistoryResponse{}}
-	if _, err := NewImportClient(service).ListImportedHistory(context.Background(), read(), "import-1", 25, "page-1"); err != nil {
+	if _, err := NewImportClient(service).ListImportedHistory(t.Context(), read(), "import-1", 25, "page-1"); err != nil {
 		t.Fatalf("list = %v", err)
 	}
 	verified := service.request.GetContext()
@@ -113,7 +113,7 @@ func TestAbsentDeclaredAtStaysZero(t *testing.T) {
 			}},
 		}},
 	}}
-	page, err := NewImportClient(service).ListImportedHistory(context.Background(), read(), "import-1", 0, "")
+	page, err := NewImportClient(service).ListImportedHistory(t.Context(), read(), "import-1", 0, "")
 	if err != nil {
 		t.Fatalf("list = %v", err)
 	}
