@@ -52,7 +52,7 @@ func (s *stubClient) Merge(_ context.Context, _ aggregate.ReadContext, _ string,
 func serve(t *testing.T, s Session, c MergeRequests, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	recorder := httptest.NewRecorder()
-	New(c, s).Routes().ServeHTTP(recorder, httptest.NewRequest(method, target, nil))
+	New(c, nil, s).Routes().ServeHTTP(recorder, httptest.NewRequest(method, target, nil))
 	return recorder
 }
 

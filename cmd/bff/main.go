@@ -106,6 +106,11 @@ func main() {
 	// Code Review (served by the data plane) shapes the MR surface.
 	review := codereview.New(codereviewv1.NewMergeRequestServiceClient(pdpConn))
 
+	// Imported review history (SPEC-0011) is read through the same door. It is a
+	// separate service in the contracts, and stays a separate client here: the
+	// two must never be shaped into one list the page cannot take apart.
+	imports := codereview.NewImportClient(codereviewv1.NewImportServiceClient(pdpConn))
+
 	// OIDC login (served by the data plane's Identity&Access).
 	auth := oidc.New(identityv1.NewOIDCLoginClient(pdpConn))
 	loginConfig := login.Config{
@@ -127,11 +132,12 @@ func main() {
 	// browser prefix instead of conflicting with it.
 	mux := http.NewServeMux()
 	mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
-	mrHandler := mr.New(review, sessions)
+	mrHandler := mr.New(review, imports, sessions)
 	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
+	mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
