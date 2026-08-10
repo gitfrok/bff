@@ -32,7 +32,29 @@ if "$runtime" run --rm "$image" /bin/sh >/dev/null 2>&1; then
   exit 1
 fi
 
-# grpc.NewClient is non-blocking; the dummy address lets the binary reach its normal startup path
-# without a live dataplane while proving its root filesystem need not be writable.
-"$runtime" run --rm --read-only -e GITFROK_PDP_ADDR=127.0.0.1:1 "$image" >/dev/null
+# grpc.NewClient is non-blocking; the dummy addresses let the binary reach its normal startup path
+# without a live dataplane or reader while proving its root filesystem need not be writable. The
+# BFF requires all three since T-0015: without a PDP it cannot authorize, without RepositoryReader
+# the browser has no data, and without a listen address it has nowhere to serve (invariant 13).
+# The server runs until stopped, so the container runs detached and is stopped after it proves
+# it came up.
+name=bff-posture-test
+"$runtime" rm -f "$name" >/dev/null 2>&1 || true
+if ! "$runtime" run --detach --rm --read-only --name "$name" \
+  -e GITFROK_PDP_ADDR=127.0.0.1:1 \
+  -e GITFROK_REPOSITORY_READER_ADDR=127.0.0.1:1 \
+  -e GITFROK_BFF_LISTEN_ADDR=127.0.0.1:18080 \
+  "$image" >/dev/null; then
+  echo "container-image: FAIL — BFF did not start with a read-only root filesystem" >&2
+  exit 1
+fi
+# Give the server a moment to bind its listener, then confirm it is still running —
+# a binary that exited non-zero after startup would fail here.
+sleep 1
+if ! "$runtime" inspect --format '{{.State.Running}}' "$name" | grep -q true; then
+  echo "container-image: FAIL — BFF exited after startup" >&2
+  "$runtime" rm -f "$name" >/dev/null 2>&1 || true
+  exit 1
+fi
+"$runtime" stop "$name" >/dev/null 2>&1 || true
 echo "container-image: OK"
