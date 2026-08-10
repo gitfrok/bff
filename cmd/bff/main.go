@@ -33,14 +33,14 @@ import (
 //
 // Per-environment configuration, never a compiled-in address (invariant 13).
 const (
-	pdpAddrEnv          = "GITFROK_PDP_ADDR"
-	readerAddrEnv       = "GITFROK_REPOSITORY_READER_ADDR"
-	listenAddrEnv       = "GITFROK_BFF_LISTEN_ADDR"
-	oidcIssuerEnv       = "GITFROK_OIDC_ISSUER"
-	oidcClientIDEnv     = "GITFROK_OIDC_CLIENT_ID"
-	oidcRedirectURIEnv  = "GITFROK_OIDC_REDIRECT_URI"
-	oidcScopeEnv        = "GITFROK_OIDC_SCOPE"
-	sessionStoreEnv     = "GITFROK_SESSION_STORE"
+	pdpAddrEnv         = "GITFROK_PDP_ADDR"
+	readerAddrEnv      = "GITFROK_REPOSITORY_READER_ADDR"
+	listenAddrEnv      = "GITFROK_BFF_LISTEN_ADDR"
+	oidcIssuerEnv      = "GITFROK_OIDC_ISSUER"
+	oidcClientIDEnv    = "GITFROK_OIDC_CLIENT_ID"
+	oidcRedirectURIEnv = "GITFROK_OIDC_REDIRECT_URI"
+	oidcScopeEnv       = "GITFROK_OIDC_SCOPE"
+	sessionStoreEnv    = "GITFROK_SESSION_STORE"
 )
 
 // decisionTTL bounds how long a cached decision may be reused.

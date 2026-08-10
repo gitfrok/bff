@@ -86,11 +86,11 @@ func (c *Client) Get(ctx context.Context, read aggregate.ReadContext, mergeReque
 // SubmitReview records a review disposition on an MR.
 func (c *Client) SubmitReview(ctx context.Context, read aggregate.ReadContext, mergeRequestID, disposition, comment, headRevision string, expectedVersion int64) (*MergeRequest, error) {
 	response, err := c.service.SubmitReview(ctx, &codereviewv1.SubmitReviewRequest{
-		Context:        c.contextOf(read),
-		MergeRequestId: mergeRequestID,
-		Disposition:    codereviewv1.ReviewDisposition(codereviewv1.ReviewDisposition_value[disposition]),
-		Comment:        comment,
-		HeadRevision:   headRevision,
+		Context:         c.contextOf(read),
+		MergeRequestId:  mergeRequestID,
+		Disposition:     codereviewv1.ReviewDisposition(codereviewv1.ReviewDisposition_value[disposition]),
+		Comment:         comment,
+		HeadRevision:    headRevision,
 		ExpectedVersion: expectedVersion,
 	})
 	if err != nil {
@@ -102,8 +102,8 @@ func (c *Client) SubmitReview(ctx context.Context, read aggregate.ReadContext, m
 // Merge completes a merge request through the backend's Repository/Git path.
 func (c *Client) Merge(ctx context.Context, read aggregate.ReadContext, mergeRequestID string, expectedVersion int64) (*MergeRequest, error) {
 	response, err := c.service.MergeMergeRequest(ctx, &codereviewv1.MergeMergeRequestRequest{
-		Context:        c.contextOf(read),
-		MergeRequestId: mergeRequestID,
+		Context:         c.contextOf(read),
+		MergeRequestId:  mergeRequestID,
 		ExpectedVersion: expectedVersion,
 	})
 	if err != nil {
@@ -115,10 +115,10 @@ func (c *Client) Merge(ctx context.Context, read aggregate.ReadContext, mergeReq
 // SetProtection replaces the exact-ref branch protection rule.
 func (c *Client) SetProtection(ctx context.Context, read aggregate.ReadContext, targetRef string, requiredApprovals int32, expectedVersion int64) error {
 	_, err := c.service.SetBranchProtection(ctx, &codereviewv1.SetBranchProtectionRequest{
-		Context:          c.contextOf(read),
-		TargetRef:        targetRef,
+		Context:           c.contextOf(read),
+		TargetRef:         targetRef,
 		RequiredApprovals: requiredApprovals,
-		ExpectedVersion:  expectedVersion,
+		ExpectedVersion:   expectedVersion,
 	})
 	return err
 }
