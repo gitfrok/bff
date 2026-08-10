@@ -30,7 +30,7 @@ func (s *stubReadBackend) Diff(_ context.Context, read ReadContext, base, head, 
 func TestRepositoryReaderShapesOnlyBackendResults(t *testing.T) {
 	backend := &stubReadBackend{}
 	reader := NewRepositoryReader(backend)
-	ctx := context.Background()
+	ctx := t.Context()
 	read := ReadContext{TenantID: "tenant-a", RepositoryID: "repo-a", ActorID: "actor-a", RequestID: "request-a"}
 
 	tree, err := reader.Tree(ctx, read, "main", "", 100)

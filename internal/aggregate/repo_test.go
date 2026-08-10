@@ -42,7 +42,7 @@ func TestAllowedReadReturnsTheView(t *testing.T) {
 	pdp := &stubPDP{decision: pep.Decision{Allowed: true, PolicyRevision: "0.1.0"}}
 	repos := &stubRepos{}
 
-	got, err := NewRepos(pdp, repos).Read(context.Background(), subject(), "acme", "repo-1")
+	got, err := NewRepos(pdp, repos).Read(t.Context(), subject(), "acme", "repo-1")
 	if err != nil {
 		t.Fatalf("Read: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestDeniedReadReturnsErrDenied(t *testing.T) {
 	pdp := &stubPDP{decision: pep.Decision{Allowed: false, Reason: "denied"}}
 	repos := &stubRepos{}
 
-	_, err := NewRepos(pdp, repos).Read(context.Background(), subject(), "acme", "repo-1")
+	_, err := NewRepos(pdp, repos).Read(t.Context(), subject(), "acme", "repo-1")
 	if !errors.Is(err, ErrDenied) {
 		t.Fatalf("error = %v, want ErrDenied", err)
 	}
@@ -71,7 +71,7 @@ func TestDeniedReadNeverTouchesTheData(t *testing.T) {
 	repos := &stubRepos{}
 	pdp := &stubPDP{decision: pep.Decision{Allowed: false}}
 
-	_, _ = NewRepos(pdp, repos).Read(context.Background(), subject(), "acme", "repo-1")
+	_, _ = NewRepos(pdp, repos).Read(t.Context(), subject(), "acme", "repo-1")
 
 	if repos.calls != 0 {
 		t.Errorf("the repository was read %d times despite a denial", repos.calls)
@@ -84,7 +84,7 @@ func TestPDPFailureDeniesAndDoesNotRead(t *testing.T) {
 	repos := &stubRepos{}
 	pdp := &stubPDP{err: errors.New("policy decision unavailable")}
 
-	_, err := NewRepos(pdp, repos).Read(context.Background(), subject(), "acme", "repo-1")
+	_, err := NewRepos(pdp, repos).Read(t.Context(), subject(), "acme", "repo-1")
 
 	if !errors.Is(err, ErrDenied) {
 		t.Errorf("error = %v, want it to wrap ErrDenied", err)
@@ -98,7 +98,7 @@ func TestPDPFailureDeniesAndDoesNotRead(t *testing.T) {
 // still get an answer — just to something else — which is the failure mode that looks like success.
 func TestTheRightQuestionIsAsked(t *testing.T) {
 	pdp := &stubPDP{decision: pep.Decision{Allowed: true}}
-	if _, err := NewRepos(pdp, &stubRepos{}).Read(context.Background(), subject(), "acme", "repo-1"); err != nil {
+	if _, err := NewRepos(pdp, &stubRepos{}).Read(t.Context(), subject(), "acme", "repo-1"); err != nil {
 		t.Fatalf("Read: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestCrossTenantSubjectIsPassedToPolicyIntact(t *testing.T) {
 	pdp := &stubPDP{decision: pep.Decision{Allowed: false}}
 	other := pep.Subject{ID: "u-1", TenantID: "globex", Roles: []string{"reader"}}
 
-	_, err := NewRepos(pdp, &stubRepos{}).Read(context.Background(), other, "acme", "repo-1")
+	_, err := NewRepos(pdp, &stubRepos{}).Read(t.Context(), other, "acme", "repo-1")
 	if !errors.Is(err, ErrDenied) {
 		t.Fatalf("error = %v, want ErrDenied", err)
 	}

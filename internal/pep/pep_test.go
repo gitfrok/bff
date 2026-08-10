@@ -66,7 +66,7 @@ func TestDecisionPassesThrough(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, _ := newPEP(t, &stubPDP{resp: tc.resp})
-			got, err := p.Decide(context.Background(), req())
+			got, err := p.Decide(t.Context(), req())
 			if err != nil {
 				t.Fatalf("Decide: %v", err)
 			}
@@ -83,7 +83,7 @@ func TestDecisionPassesThrough(t *testing.T) {
 func TestRequestFieldsReachThePDP(t *testing.T) {
 	pdp := &stubPDP{resp: allowResp("r1")}
 	p, _ := newPEP(t, pdp)
-	if _, err := p.Decide(context.Background(), req()); err != nil {
+	if _, err := p.Decide(t.Context(), req()); err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
 	got := pdp.lastReq
@@ -100,8 +100,8 @@ func TestRepeatedRequestIsServedFromCache(t *testing.T) {
 	pdp := &stubPDP{resp: allowResp("r1")}
 	p, _ := newPEP(t, pdp)
 
-	for i := 0; i < 5; i++ {
-		if _, err := p.Decide(context.Background(), req()); err != nil {
+	for range 5 {
+		if _, err := p.Decide(t.Context(), req()); err != nil {
 			t.Fatalf("Decide: %v", err)
 		}
 	}
@@ -116,8 +116,8 @@ func TestDenialsAreCachedToo(t *testing.T) {
 	pdp := &stubPDP{resp: denyResp("r1")}
 	p, _ := newPEP(t, pdp)
 
-	for i := 0; i < 3; i++ {
-		got, err := p.Decide(context.Background(), req())
+	for range 3 {
+		got, err := p.Decide(t.Context(), req())
 		if err != nil {
 			t.Fatalf("Decide: %v", err)
 		}
@@ -188,7 +188,7 @@ func TestCacheKeyIsStableAcrossMapIterationOrder(t *testing.T) {
 	r := req()
 	r.Context = map[string]string{"a": "1", "b": "2", "c": "3", "d": "4", "e": "5"}
 	first := cacheKey(r)
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if got := cacheKey(r); got != first {
 			t.Fatal("cache key changed between calls on identical input")
 		}
@@ -260,7 +260,7 @@ func TestTransportFailureIsNotCached(t *testing.T) {
 	pdp := &stubPDP{err: status.Error(codes.Internal, "policy decision unavailable")}
 	p, _ := newPEP(t, pdp)
 
-	got, err := p.Decide(context.Background(), req())
+	got, err := p.Decide(t.Context(), req())
 	if err == nil {
 		t.Fatal("a transport failure returned no error")
 	}
@@ -271,7 +271,7 @@ func TestTransportFailureIsNotCached(t *testing.T) {
 	// Recovery must be immediate, not TTL-delayed.
 	pdp.err = nil
 	pdp.resp = allowResp("r1")
-	got, err = p.Decide(context.Background(), req())
+	got, err = p.Decide(t.Context(), req())
 	if err != nil {
 		t.Fatalf("after recovery: %v", err)
 	}
@@ -282,7 +282,7 @@ func TestTransportFailureIsNotCached(t *testing.T) {
 
 func TestAllowedIsNeverTrueOnError(t *testing.T) {
 	p, _ := newPEP(t, &stubPDP{err: errors.New("connection refused")})
-	got, err := p.Decide(context.Background(), req())
+	got, err := p.Decide(t.Context(), req())
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -300,7 +300,7 @@ func TestCacheIsBounded(t *testing.T) {
 	p := New(pdp, Options{TTL: time.Hour, MaxEntries: 10})
 	p.now = func() time.Time { return time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC) }
 
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		r := req()
 		r.Resource.ID = "repo-" + string(rune('a'+i%26)) + string(rune('a'+i/26))
 		mustDecide(t, p, r)
@@ -318,7 +318,7 @@ func TestEvictionPrefersExpiredEntries(t *testing.T) {
 	now := time.Date(2026, 8, 6, 12, 0, 0, 0, time.UTC)
 	p.now = func() time.Time { return now }
 
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		r := req()
 		r.Resource.ID = "old-" + string(rune('a'+i))
 		mustDecide(t, p, r)
@@ -342,7 +342,7 @@ func TestEvictionPrefersExpiredEntries(t *testing.T) {
 
 func mustDecide(t *testing.T, p *PEP, r Request) Decision {
 	t.Helper()
-	got, err := p.Decide(context.Background(), r)
+	got, err := p.Decide(t.Context(), r)
 	if err != nil {
 		t.Fatalf("Decide: %v", err)
 	}
