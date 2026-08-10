@@ -7,6 +7,7 @@ import "context"
 // shapes its result (SPEC-0017 AC5).
 type ReadContext struct {
 	TenantID, RepositoryID, ActorID, RequestID string
+	ActorRoles                                 []string
 }
 
 type TreeEntry struct {

@@ -2,6 +2,7 @@ package aggregate
 
 import (
 	"context"
+	"reflect"
 	"testing"
 )
 
@@ -36,21 +37,21 @@ func TestRepositoryReaderShapesOnlyBackendResults(t *testing.T) {
 	if err != nil || len(tree.Entries) != 1 || tree.Entries[0].Path != "README.md" || tree.NextPageToken != "next" {
 		t.Fatalf("tree=%+v err=%v", tree, err)
 	}
-	if backend.treeRequest != read {
+	if !reflect.DeepEqual(backend.treeRequest, read) {
 		t.Fatalf("tree context=%+v want=%+v", backend.treeRequest, read)
 	}
 	var file []byte
 	if err := reader.File(ctx, read, "main", "README.md", func(chunk FileChunk) error { file = append(file, chunk.Data...); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if string(file) != "content" || backend.fileRequest != read {
+	if string(file) != "content" || !reflect.DeepEqual(backend.fileRequest, read) {
 		t.Fatalf("file=%q context=%+v", file, backend.fileRequest)
 	}
 	var diff []byte
 	if err := reader.Diff(ctx, read, "base", "head", "", func(chunk DiffChunk) error { diff = append(diff, chunk.Data...); return nil }); err != nil {
 		t.Fatal(err)
 	}
-	if string(diff) != "patch" || backend.diffRequest != read {
+	if string(diff) != "patch" || !reflect.DeepEqual(backend.diffRequest, read) {
 		t.Fatalf("diff=%q context=%+v", diff, backend.diffRequest)
 	}
 }
