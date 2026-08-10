@@ -122,10 +122,16 @@ func main() {
 	// The HTTP surface. The browser handler is the SPEC-0021 surface; the MR
 	// handler is the minimal T-0016 web bar; login owns /login, /callback and
 	// /logout. Go's ServeMux prefers the most specific pattern, so the MR
-	// routes (which name merge_requests) win over the browser prefix.
+	// routes (which name merge_requests) win over the browser prefix. The MR
+	// handler's routes are registered directly so they coexist with the
+	// browser prefix instead of conflicting with it.
 	mux := http.NewServeMux()
 	mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
-	mux.Handle("/v1/repositories/", mr.New(review, sessions).Routes())
+	mrHandler := mr.New(review, sessions)
+	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

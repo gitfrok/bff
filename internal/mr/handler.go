@@ -72,6 +72,13 @@ func (h *Handler) Routes() http.Handler {
 	return mux
 }
 
+// ServeHTTP lets the handler be registered directly on a parent mux alongside
+// other /v1/repositories/ handlers; the mux routes each request to the right
+// method on this handler.
+func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.Routes().ServeHTTP(w, r)
+}
+
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	read, ok := h.session.ReadContext(r)
 	if !ok || read.TenantID == "" || read.ActorID == "" {
