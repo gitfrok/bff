@@ -1,0 +1,147 @@
+// Package codereview adapts the generated MergeRequestService gRPC client onto
+// BFF-shaped request/response types. It shapes and forwards; the backend owns
+// every decision (SPEC-0019, invariant 18).
+package codereview
+
+import (
+	"context"
+	"time"
+
+	codereviewv1 "github.com/gitfrok/bff/gen/proto/codereview/v1"
+	"github.com/gitfrok/bff/internal/aggregate"
+)
+
+// Client talks to the backend's MergeRequestService.
+type Client struct {
+	service codereviewv1.MergeRequestServiceClient
+}
+
+// New wires the adapter onto the generated client.
+func New(service codereviewv1.MergeRequestServiceClient) *Client {
+	return &Client{service: service}
+}
+
+// MergeRequest is the shaped review state the browser consumes.
+type MergeRequest struct {
+	MergeRequestID string
+	RepositoryID   string
+	SourceRef      string
+	TargetRef      string
+	Title          string
+	Description    string
+	CreatorID      string
+	State          string
+	HeadRevision   string
+	Version        int64
+	CreatedAt      time.Time
+}
+
+// ReviewContext is the verified identity the backend's ReviewCommandContext
+// requires. It comes only from the session.
+type ReviewContext struct {
+	TenantID     string
+	RepositoryID string
+	ActorID      string
+	ActorRoles   []string
+	RequestID    string
+}
+
+func (c *Client) contextOf(read aggregate.ReadContext) *codereviewv1.ReviewCommandContext {
+	return &codereviewv1.ReviewCommandContext{
+		TenantId:     read.TenantID,
+		RepositoryId: read.RepositoryID,
+		ActorId:      read.ActorID,
+		ActorRoles:   read.ActorRoles,
+		RequestId:    read.RequestID,
+	}
+}
+
+// Create opens a merge request.
+func (c *Client) Create(ctx context.Context, read aggregate.ReadContext, sourceRef, targetRef, title, description string) (*MergeRequest, error) {
+	response, err := c.service.CreateMergeRequest(ctx, &codereviewv1.CreateMergeRequestRequest{
+		Context:     c.contextOf(read),
+		SourceRef:   sourceRef,
+		TargetRef:   targetRef,
+		Title:       title,
+		Description: description,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// Get returns one merge request.
+func (c *Client) Get(ctx context.Context, read aggregate.ReadContext, mergeRequestID string) (*MergeRequest, error) {
+	response, err := c.service.GetMergeRequest(ctx, &codereviewv1.GetMergeRequestRequest{
+		Context:        c.contextOf(read),
+		MergeRequestId: mergeRequestID,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// SubmitReview records a review disposition on an MR.
+func (c *Client) SubmitReview(ctx context.Context, read aggregate.ReadContext, mergeRequestID, disposition, comment, headRevision string, expectedVersion int64) (*MergeRequest, error) {
+	response, err := c.service.SubmitReview(ctx, &codereviewv1.SubmitReviewRequest{
+		Context:         c.contextOf(read),
+		MergeRequestId:  mergeRequestID,
+		Disposition:     codereviewv1.ReviewDisposition(codereviewv1.ReviewDisposition_value[disposition]),
+		Comment:         comment,
+		HeadRevision:    headRevision,
+		ExpectedVersion: expectedVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// Merge completes a merge request through the backend's Repository/Git path.
+func (c *Client) Merge(ctx context.Context, read aggregate.ReadContext, mergeRequestID string, expectedVersion int64) (*MergeRequest, error) {
+	response, err := c.service.MergeMergeRequest(ctx, &codereviewv1.MergeMergeRequestRequest{
+		Context:         c.contextOf(read),
+		MergeRequestId:  mergeRequestID,
+		ExpectedVersion: expectedVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// SetProtection replaces the exact-ref branch protection rule.
+func (c *Client) SetProtection(ctx context.Context, read aggregate.ReadContext, targetRef string, requiredApprovals int32, expectedVersion int64) error {
+	_, err := c.service.SetBranchProtection(ctx, &codereviewv1.SetBranchProtectionRequest{
+		Context:           c.contextOf(read),
+		TargetRef:         targetRef,
+		RequiredApprovals: requiredApprovals,
+		ExpectedVersion:   expectedVersion,
+	})
+	return err
+}
+
+func shape(mr *codereviewv1.MergeRequest) *MergeRequest {
+	if mr == nil {
+		return nil
+	}
+	created := time.Time{}
+	if t := mr.GetCreatedAt(); t != nil {
+		created = t.AsTime()
+	}
+	return &MergeRequest{
+		MergeRequestID: mr.GetMergeRequestId(),
+		RepositoryID:   mr.GetRepositoryId(),
+		SourceRef:      mr.GetSourceRef(),
+		TargetRef:      mr.GetTargetRef(),
+		Title:          mr.GetTitle(),
+		Description:    mr.GetDescription(),
+		CreatorID:      mr.GetCreatorId(),
+		State:          mr.GetState().String(),
+		HeadRevision:   mr.GetHeadRevision(),
+		Version:        mr.GetVersion(),
+		CreatedAt:      created,
+	}
+}
