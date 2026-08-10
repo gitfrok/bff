@@ -20,6 +20,7 @@ import (
 	"github.com/gitfrok/bff/internal/browser"
 	"github.com/gitfrok/bff/internal/codereview"
 	"github.com/gitfrok/bff/internal/login"
+	"github.com/gitfrok/bff/internal/mr"
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/repositoryreader"
@@ -118,10 +119,13 @@ func main() {
 	}
 	loginHandler := login.New(loginConfig, auth, login.HTTPDiscovery{Client: &http.Client{Timeout: 10 * time.Second}}, sessions)
 
-	// The HTTP surface. The browser handler is the SPEC-0021 surface; login owns /login,
-	// /callback and /logout.
+	// The HTTP surface. The browser handler is the SPEC-0021 surface; the MR
+	// handler is the minimal T-0016 web bar; login owns /login, /callback and
+	// /logout. Go's ServeMux prefers the most specific pattern, so the MR
+	// routes (which name merge_requests) win over the browser prefix.
 	mux := http.NewServeMux()
 	mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
+	mux.Handle("/v1/repositories/", mr.New(review, sessions).Routes())
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -140,7 +144,6 @@ func main() {
 		_ = server.Shutdown(shutdown)
 	}()
 
-	_ = review // the MR HTTP surface lands with the T-0016 web half
 	fmt.Printf("gitfrok bff: PDP on %s, RepositoryReader on %s, serving %s\n", pdpAddr, readerAddr, listenAddr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "bff: %v\n", err)
