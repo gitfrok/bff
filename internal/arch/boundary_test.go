@@ -56,12 +56,19 @@ func TestNoBoundaryViolations(t *testing.T) {
 // placeFixture writes a testdata fixture into a temp tree and returns its path, so a forbidden
 // edge is checked through exactly the same code path as real source.
 func placeFixture(t *testing.T, fixture string) string {
+	return placeFixtureIn(t, fixture, "handler")
+}
+
+// placeFixtureIn is placeFixture with the package directory chosen, because ADR-0052's session-store
+// waiver is scoped by path: the same source is legal under internal/session/ and illegal elsewhere,
+// and only a real path can prove it.
+func placeFixtureIn(t *testing.T, fixture, pkgDir string) string {
 	t.Helper()
 	content, err := os.ReadFile(filepath.Join("testdata", fixture))
 	if err != nil {
 		t.Fatal(err)
 	}
-	dir := filepath.Join(t.TempDir(), "internal", "handler")
+	dir := filepath.Join(t.TempDir(), "internal", pkgDir)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -124,6 +131,64 @@ func TestForbiddenEdgesAreRejected(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestSessionStoreWaiverIsPathScoped is ADR-0052's whole guarantee: the exemption needs the marker
+// AND the package, so it can be neither inherited by location nor pasted into a handler.
+func TestSessionStoreWaiverIsPathScoped(t *testing.T) {
+	t.Run("waived inside internal/session is allowed", func(t *testing.T) {
+		vs, err := Scan(token.NewFileSet(), placeFixtureIn(t, "good_session_store_waived.go.txt", "session"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(vs) != 0 {
+			t.Errorf("the session store is ADR-0052's one exception, got %v", vs)
+		}
+	})
+
+	t.Run("unwaived inside internal/session still fires", func(t *testing.T) {
+		vs, err := Scan(token.NewFileSet(), placeFixtureIn(t, "bad_session_store_unwaived.go.txt", "session"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasRule(vs, RuleDirectDataStore) {
+			t.Errorf("the path alone must grant nothing, got %v", vs)
+		}
+	})
+
+	t.Run("a subdirectory of internal/session does not inherit the waiver", func(t *testing.T) {
+		vs, err := Scan(token.NewFileSet(), placeFixtureIn(t, "good_session_store_waived.go.txt", filepath.Join("session", "replica")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasRule(vs, RuleDirectDataStore) {
+			t.Errorf("ADR-0052 exempts one package, not a subtree, got %v", vs)
+		}
+	})
+
+	t.Run("the waiver outside internal/session is itself a violation", func(t *testing.T) {
+		vs, err := Scan(token.NewFileSet(), placeFixtureIn(t, "bad_session_store_waiver_in_handler.go.txt", "handler"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasRule(vs, RuleSessionStoreWaiverOutsidePackage) {
+			t.Errorf("a marker that grants nothing must say so, got %v", vs)
+		}
+		if !hasRule(vs, RuleDirectDataStore) {
+			t.Errorf("the import it tried to cover must still fire, got %v", vs)
+		}
+	})
+}
+
+// TestSessionStoreWaiverNeedsAReason pins the reason requirement: a bare marker silences the gate
+// without saying anything, and the reason is what a reviewer assesses.
+func TestSessionStoreWaiverNeedsAReason(t *testing.T) {
+	if sessionStoreWaiver.MatchString("//arch:allow-session-store") {
+		t.Error("a bare marker must not waive anything")
+	}
+	if !sessionStoreWaiver.MatchString("//arch:allow-session-store ADR-0052 — the BFF's own state") {
+		t.Error("a marker with a reason must waive")
 	}
 }
 

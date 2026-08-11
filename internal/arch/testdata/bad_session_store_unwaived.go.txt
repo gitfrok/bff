@@ -1,0 +1,10 @@
+// Fixture: a datastore import inside internal/session/ with no marker. The path alone grants
+// nothing — ADR-0052's exemption has to be declared, or a future file inherits it by sitting in the
+// right directory.
+package session
+
+import "github.com/redis/go-redis/v9"
+
+func Client(addr string) *redis.Client {
+	return redis.NewClient(&redis.Options{Addr: addr})
+}

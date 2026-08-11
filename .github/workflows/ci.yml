@@ -14,6 +14,23 @@ jobs:
   verify:
     name: build + vet + arch gates
     runs-on: ubuntu-latest
+    # The session store's own suite is the only proof that ADR-0049's store behaves — and it skips
+    # without an endpoint, by design, because a test that quietly passes without its infrastructure
+    # is evidence of nothing. Skipping on every run would make this gate report inconclusive
+    # forever, which is the failure ADR-0034/0036 were written about. So CI supplies the endpoint:
+    # the same Valkey pin deploy/dev runs.
+    services:
+      valkey:
+        image: docker.io/valkey/valkey:9.1.1
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "valkey-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      GITFROK_TEST_VALKEY_ADDR: 127.0.0.1:6379
     steps:
       # fetch-depth: 0 so the ceremony gate below can diff against the base branch. With the
       # default depth of 1 there is no merge base and the gate exits 3 rather than passing
@@ -47,6 +64,17 @@ jobs:
       # caught by a fixture, so the gate cannot pass vacuously.
       - name: architecture boundary gates
         run: go test ./internal/arch/... -v
+
+      # The live session suite must not be allowed to skip here: without this assertion, losing the
+      # service container above would turn seven tests into silence and nothing would say so.
+      - name: session store suite runs against a real Valkey
+        run: |
+          out="$(go test ./internal/session/ -v -count=1)"
+          echo "$out"
+          if printf '%s' "$out" | grep -q -- '--- SKIP'; then
+            echo "::error::the live Valkey suite skipped — the service container is not reachable"
+            exit 1
+          fi
 
       - name: go test
         run: go test ./...
