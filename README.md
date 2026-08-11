@@ -18,6 +18,10 @@ GITFROK_SESSION_VALKEY_PASSWORD=…                 # optional
 to memory would leave the process looking healthy while logging every user out on the next rollout,
 and nothing in a response would say why.
 
+Both of ADR-0049's expiry bounds are server-side: the **absolute** deadline is a field in the record,
+stamped once and never rewritten, and the **idle** timeout is the key's TTL, refreshed on use but
+never past that deadline. The record is the authority; the TTL is the sweeper.
+
 This is the **only** datastore the BFF may open. `internal/arch`'s `bff-direct-datastore` rule fails
 the build on any other cache or database client, anywhere in the tree, and the exemption here needs
 both the path (`internal/session/`) and the marker `//arch:allow-session-store <reason>` — ADR-0052.

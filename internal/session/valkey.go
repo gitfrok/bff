@@ -21,12 +21,26 @@ import (
 // roles, expiry — and nothing another context owns. Reading any other key through this client is
 // still the cross-context access invariant 15 forbids.
 //
-// The record's absolute expiry is the key's TTL. The BFF sets it at creation and never extends it in
-// place, so ADR-0049's expiry bound holds with no sweeper: an expired session is a key that is gone.
+// ADR-0049 decision 5 asks for two bounds, and they are enforced by different things:
+//
+//   - the **absolute** deadline is a field in the record, stamped at creation and never rewritten,
+//     so no amount of activity can push a session past it;
+//   - the **idle** timeout is the key's TTL, refreshed on a successful load but never beyond that
+//     deadline, so an abandoned session disappears without a sweeper.
+//
+// Keeping the absolute bound out of the TTL is what makes refreshing safe: the thing being extended
+// is the idle window, and the record it extends still carries its own hard stop.
 type Valkey struct {
 	client redis.UniversalClient
 	prefix string
+	idle   time.Duration
+	now    func() time.Time
 }
+
+// idleWindow is how long a session survives without being used. Shorter than the absolute lifetime
+// on purpose: an abandoned browser tab should stop being a credential long before the cookie's own
+// expiry would have retired it.
+const idleWindow = 2 * time.Hour
 
 // keyPrefix namespaces session keys so this store can share an instance with anything else without
 // a collision, and so an operator can see what a key is for.
@@ -40,22 +54,44 @@ type record struct {
 	ActorID    string   `json:"actor_id"`
 	RequestID  string   `json:"request_id"`
 	ActorRoles []string `json:"actor_roles,omitempty"`
+	// ExpiresAt is the absolute deadline, in Unix seconds. Written once and never rewritten, so
+	// activity extends the idle window and nothing extends this.
+	ExpiresAt int64 `json:"expires_at"`
 }
 
 // NewValkey builds a store over an already-configured client. The caller owns the client's lifetime
 // and its address, which is per-environment configuration (invariant 13).
 func NewValkey(client redis.UniversalClient) *Valkey {
-	return &Valkey{client: client, prefix: keyPrefix}
+	return &Valkey{client: client, prefix: keyPrefix, idle: idleWindow, now: time.Now}
+}
+
+// dialTimeouts bound every operation against the store. Without them a partitioned Valkey turns
+// each browser request into a hang for as long as the caller's context allows, and the session
+// lookup sits in front of every browser read there is.
+var dialTimeouts = struct{ dial, read, write time.Duration }{
+	dial:  3 * time.Second,
+	read:  2 * time.Second,
+	write: 2 * time.Second,
 }
 
 // Dial builds a client for addr and verifies it answers before returning. A configured store that
 // cannot be reached is fatal to the caller by design (ADR-0052 decision 4): a BFF that quietly fell
 // back to memory would look healthy while logging every user out on the next rollout.
+//
+// TLS is deliberately not configured here: in-cluster transport posture is one decision for every
+// hop (the gRPC links are plaintext in dev for the same reason), and inventing a different answer
+// for this one link would be a decision no ADR has taken.
 func Dial(ctx context.Context, addr, password string) (*Valkey, error) {
 	if addr == "" {
 		return nil, errors.New("session: no Valkey address configured")
 	}
-	client := redis.NewClient(&redis.Options{Addr: addr, Password: password})
+	client := redis.NewClient(&redis.Options{
+		Addr:         addr,
+		Password:     password,
+		DialTimeout:  dialTimeouts.dial,
+		ReadTimeout:  dialTimeouts.read,
+		WriteTimeout: dialTimeouts.write,
+	})
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()
 		return nil, fmt.Errorf("session: Valkey at %s did not answer: %w", addr, err)
@@ -76,6 +112,7 @@ func (v *Valkey) Create(ctx context.Context, read aggregate.ReadContext, ttl tim
 		ActorID:    read.ActorID,
 		RequestID:  read.RequestID,
 		ActorRoles: read.ActorRoles,
+		ExpiresAt:  v.now().Add(ttl).Unix(),
 	})
 	if err != nil {
 		return "", err
@@ -83,7 +120,7 @@ func (v *Valkey) Create(ctx context.Context, read aggregate.ReadContext, ttl tim
 	// SetNX rather than Set: an identifier is 256 bits from a cryptographic source, so a collision
 	// is not a real event — but if one ever happened, overwriting would silently re-point a live
 	// session at another actor, and that is not a failure mode worth leaving open.
-	ok, err := v.client.SetNX(ctx, v.prefix+id, body, ttl).Result()
+	ok, err := v.client.SetNX(ctx, v.prefix+id, body, min(v.idle, ttl)).Result()
 	if err != nil {
 		return "", err
 	}
@@ -115,6 +152,20 @@ func (v *Valkey) Load(ctx context.Context, id string) (aggregate.ReadContext, er
 	if rec.TenantID == "" || rec.ActorID == "" {
 		return aggregate.ReadContext{}, ErrNoSession
 	}
+
+	// The absolute deadline is the record's, so a session cannot be kept alive past it by using it.
+	// A key that outlived its deadline — a manual EXPIRE, a restored snapshot — is deleted here
+	// rather than honoured, which keeps the record the authority and the TTL merely the sweeper.
+	remaining := time.Until(time.Unix(rec.ExpiresAt, 0))
+	if rec.ExpiresAt == 0 || remaining <= 0 {
+		_ = v.client.Del(ctx, v.prefix+id).Err()
+		return aggregate.ReadContext{}, ErrNoSession
+	}
+	// The idle half of ADR-0049 decision 5: use refreshes the window, never past the deadline. A
+	// failure to refresh is not a failure to resolve — the session is valid, and the worst case is
+	// that it retires earlier than it had to.
+	_ = v.client.Expire(ctx, v.prefix+id, min(v.idle, remaining)).Err()
+
 	return aggregate.ReadContext{
 		TenantID:   rec.TenantID,
 		ActorID:    rec.ActorID,

@@ -157,6 +157,16 @@ func TestSessionStoreWaiverIsPathScoped(t *testing.T) {
 		}
 	})
 
+	t.Run("a subdirectory of internal/session does not inherit the waiver", func(t *testing.T) {
+		vs, err := Scan(token.NewFileSet(), placeFixtureIn(t, "good_session_store_waived.go.txt", filepath.Join("session", "replica")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !hasRule(vs, RuleDirectDataStore) {
+			t.Errorf("ADR-0052 exempts one package, not a subtree, got %v", vs)
+		}
+	})
+
 	t.Run("the waiver outside internal/session is itself a violation", func(t *testing.T) {
 		vs, err := Scan(token.NewFileSet(), placeFixtureIn(t, "bad_session_store_waiver_in_handler.go.txt", "handler"))
 		if err != nil {

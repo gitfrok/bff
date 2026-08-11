@@ -110,6 +110,104 @@ func TestLiveValkeyExpiryIsTheServersAndBounded(t *testing.T) {
 	}
 }
 
+// ADR-0049 decision 5's idle half: using a session refreshes its window. Proved by letting the TTL
+// visibly decay and checking a load pushes it back up.
+func TestLiveValkeyLoadRefreshesTheIdleWindow(t *testing.T) {
+	store := liveValkey(t)
+	store.idle = 2 * time.Second
+
+	id, err := store.Create(t.Context(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"}, time.Hour)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), id) })
+
+	time.Sleep(1100 * time.Millisecond)
+	before, err := store.client.PTTL(t.Context(), keyPrefix+id).Result()
+	if err != nil {
+		t.Fatalf("pttl: %v", err)
+	}
+	if before >= 1100*time.Millisecond {
+		t.Fatalf("expected the idle window to have decayed, got %v", before)
+	}
+	if _, err := store.Load(t.Context(), id); err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	after, err := store.client.PTTL(t.Context(), keyPrefix+id).Result()
+	if err != nil {
+		t.Fatalf("pttl: %v", err)
+	}
+	if after <= before {
+		t.Errorf("a load must refresh the idle window: %v then %v", before, after)
+	}
+}
+
+// ...and the absolute deadline is not refreshable. Activity extends the idle window; nothing extends
+// the record's own hard stop, so a busy session still retires on time.
+func TestLiveValkeyUseCannotOutlastTheAbsoluteDeadline(t *testing.T) {
+	store := liveValkey(t)
+	store.idle = time.Hour // idle far longer than the absolute lifetime, so only the deadline can end it
+
+	id, err := store.Create(t.Context(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"}, time.Second)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), id) })
+
+	// Keep using it across the deadline. Each load refreshes the idle window and must not move the
+	// deadline, so the session has to die anyway.
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		_, err = store.Load(t.Context(), id)
+		if errors.Is(err, ErrNoSession) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("load: %v", err)
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Error("a session used continuously outlived its absolute deadline")
+}
+
+// A key whose TTL was extended out of band — a manual EXPIRE, a restored snapshot — must not
+// resolve past the record's deadline. The record is the authority; the TTL is only the sweeper.
+func TestLiveValkeyRecordDeadlineBeatsTheKeyTTL(t *testing.T) {
+	store := liveValkey(t)
+	id, err := store.Create(t.Context(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"}, time.Second)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Delete(context.Background(), id) })
+
+	if err := store.client.Expire(t.Context(), keyPrefix+id, time.Hour).Err(); err != nil {
+		t.Fatalf("expire: %v", err)
+	}
+	time.Sleep(1100 * time.Millisecond)
+
+	if _, err := store.Load(t.Context(), id); !errors.Is(err, ErrNoSession) {
+		t.Errorf("expected the record's deadline to win, got %v", err)
+	}
+	if n, err := store.client.Exists(t.Context(), keyPrefix+id).Result(); err != nil || n != 0 {
+		t.Errorf("a session past its deadline must be deleted, exists=%d err=%v", n, err)
+	}
+}
+
+// A record written without a deadline is not a session. Failing closed keeps a foreign or
+// half-migrated value from resolving to an identity with no hard stop at all.
+func TestLiveValkeyRecordWithoutADeadlineIsRefused(t *testing.T) {
+	store := liveValkey(t)
+	key := keyPrefix + "deadlineless"
+	if err := store.client.Set(t.Context(), key, `{"tenant_id":"t","actor_id":"a"}`, time.Minute).Err(); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.client.Del(context.Background(), key).Err() })
+
+	if _, err := store.Load(t.Context(), "deadlineless"); !errors.Is(err, ErrNoSession) {
+		t.Errorf("expected ErrNoSession, got %v", err)
+	}
+}
+
 func TestLiveValkeyExpiredSessionIsNoSession(t *testing.T) {
 	store := liveValkey(t)
 	id, err := store.Create(t.Context(), aggregate.ReadContext{TenantID: "t", ActorID: "a", RequestID: "r"}, 50*time.Millisecond)

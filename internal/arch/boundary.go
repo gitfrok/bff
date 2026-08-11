@@ -6,6 +6,7 @@ package arch
 import (
 	"go/parser"
 	"go/token"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -64,8 +65,10 @@ var backendInternalRe = regexp.MustCompile(
 // Both conditions below are required. The path alone would let a future file inherit the exemption
 // by sitting in the right directory; the marker alone would let it be pasted into a handler.
 const (
-	// sessionStoreDir is the only directory a datastore import may appear in.
-	sessionStoreDir = "/internal/session/"
+	// sessionStoreDir is the only directory a datastore import may appear in, and it is matched as
+	// the file's immediate parent rather than as a substring: `internal/session/replica/` is a
+	// different package, and ADR-0052 exempts one flat, reviewable location — not a subtree.
+	sessionStoreDir = "internal/session"
 	// RuleSessionStoreWaiverOutsidePackage fires when the waiver is used anywhere else. A marker
 	// that silently did nothing would be worse than one that fails: the author believed it worked.
 	RuleSessionStoreWaiverOutsidePackage = "session-store-waiver-outside-session-package"
@@ -125,7 +128,7 @@ func importsOf(fset *token.FileSet, path string) ([]anImport, map[int]bool, erro
 
 // checkFile applies the BFF boundary rules to one file's imports.
 func checkFile(file string, imports []anImport, waived map[int]bool) []Violation {
-	inSessionPackage := strings.Contains(filepath.ToSlash(file), sessionStoreDir)
+	inSessionPackage := strings.HasSuffix(path.Dir(filepath.ToSlash(file)), sessionStoreDir)
 
 	// A waiver outside internal/session/ is reported even when nothing else is wrong: the author
 	// wrote it believing it granted something, and it does not.
