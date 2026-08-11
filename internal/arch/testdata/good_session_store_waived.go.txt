@@ -1,0 +1,12 @@
+// Fixture: the one datastore ADR-0052 permits. A session record holds what the BFF minted at the
+// OIDC callback — tenant, actor, roles, expiry — and nothing another context owns, so resolving it
+// is not the cross-context read invariant 15 forbids. Only legal under internal/session/, and only
+// with the marker.
+package session
+
+//arch:allow-session-store ADR-0052 — the BFF's own session state, not another context's data
+import "github.com/redis/go-redis/v9"
+
+func Client(addr string) *redis.Client {
+	return redis.NewClient(&redis.Options{Addr: addr})
+}

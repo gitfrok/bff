@@ -1,0 +1,11 @@
+// Fixture: the marker pasted into a handler. The waiver is scoped to internal/session/, so this is
+// two violations at once — the datastore import, and a waiver its author believed was granting
+// something.
+package handler
+
+//arch:allow-session-store we also keep some state here
+import "github.com/redis/go-redis/v9"
+
+func Client(addr string) *redis.Client {
+	return redis.NewClient(&redis.Options{Addr: addr})
+}

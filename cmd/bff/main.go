@@ -42,6 +42,8 @@ const (
 	oidcRedirectURIEnv = "GITFROK_OIDC_REDIRECT_URI"
 	oidcScopeEnv       = "GITFROK_OIDC_SCOPE"
 	sessionStoreEnv    = "GITFROK_SESSION_STORE"
+	sessionAddrEnv     = "GITFROK_SESSION_VALKEY_ADDR"
+	sessionPasswordEnv = "GITFROK_SESSION_VALKEY_PASSWORD"
 )
 
 // decisionTTL bounds how long a cached decision may be reused.
@@ -92,11 +94,33 @@ func main() {
 	enforcer := pep.New(policyv1.NewPolicyDecisionPointClient(pdpConn), pep.Options{TTL: decisionTTL})
 	_ = enforcer
 
-	// The session store. ADR-0049 decision 5 names Valkey; the in-memory store is the dev
-	// posture until a shared store is configured.
-	var store session.Store = session.NewMemory()
-	if os.Getenv(sessionStoreEnv) == "valkey" {
-		fmt.Fprintln(os.Stderr, "bff: GITFROK_SESSION_STORE=valkey is not wired yet; using the in-memory store")
+	// The session store. ADR-0049 decision 5 names Valkey and ADR-0052 permits this process to open
+	// it — the one datastore the BFF may hold, because a session is its own state.
+	//
+	// A configured store that cannot be reached is fatal (ADR-0052 decision 4). Falling back to
+	// memory here would leave the process looking healthy while logging every user out on the next
+	// rollout, and nothing in a response would say why.
+	var store session.Store
+	switch mode := os.Getenv(sessionStoreEnv); mode {
+	case "valkey":
+		dial, cancel := context.WithTimeout(ctx, 10*time.Second)
+		valkey, err := session.Dial(dial, os.Getenv(sessionAddrEnv), os.Getenv(sessionPasswordEnv))
+		cancel()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "%s=valkey but the store is unusable: %v\n"+
+				"set %s, or set %s=memory to accept sessions that die with this process\n",
+				sessionStoreEnv, err, sessionAddrEnv, sessionStoreEnv)
+			os.Exit(1)
+		}
+		defer func() { _ = valkey.Close() }()
+		store = valkey
+	case "", "memory":
+		// The dev posture: a restart logs everyone out, which is the correct failure mode for state
+		// whose loss is an inconvenience rather than a correctness break.
+		store = session.NewMemory()
+	default:
+		fmt.Fprintf(os.Stderr, "%s=%q is not a store: use valkey or memory\n", sessionStoreEnv, mode)
+		os.Exit(1)
 	}
 	sessions := session.NewManager(store)
 
