@@ -17,9 +17,11 @@ type fakeService struct {
 	triageReq  *securityv1.SetTriageRequest
 	listReq    *securityv1.ListFindingsRequest
 	summaryReq *securityv1.GetFindingsSummaryRequest
+	mrFindReq  *securityv1.ListMergeRequestFindingsRequest
 	triageResp *securityv1.SetTriageResponse
 	listResp   *securityv1.ListFindingsResponse
 	summaryRes *securityv1.GetFindingsSummaryResponse
+	mrFindResp *securityv1.ListMergeRequestFindingsResponse
 	err        error
 }
 
@@ -48,6 +50,11 @@ func (f *fakeService) GetTriage(context.Context, *securityv1.GetTriageRequest, .
 func (f *fakeService) GetFindingsSummary(_ context.Context, req *securityv1.GetFindingsSummaryRequest, _ ...grpc.CallOption) (*securityv1.GetFindingsSummaryResponse, error) {
 	f.summaryReq = req
 	return f.summaryRes, f.err
+}
+
+func (f *fakeService) ListMergeRequestFindings(_ context.Context, req *securityv1.ListMergeRequestFindingsRequest, _ ...grpc.CallOption) (*securityv1.ListMergeRequestFindingsResponse, error) {
+	f.mrFindReq = req
+	return f.mrFindResp, f.err
 }
 
 func read() aggregate.ReadContext {

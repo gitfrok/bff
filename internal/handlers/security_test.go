@@ -24,6 +24,8 @@ type stubSecurity struct {
 	dimensions []string
 	page       security.FindingPage
 	summary    security.Summary
+	mrQuery    security.MergeRequestFindingsQuery
+	mrPage     security.MergeRequestFindingsPage
 	err        error
 	calls      int
 }
@@ -41,6 +43,11 @@ func (s *stubSecurity) FindingsSummary(_ context.Context, read aggregate.ReadCon
 func (s *stubSecurity) SetTriage(_ context.Context, read aggregate.ReadContext, in security.TriageRequest) (security.Triage, error) {
 	s.read, s.triage, s.calls = read, in, s.calls+1
 	return s.triageOut, s.err
+}
+
+func (s *stubSecurity) ListMergeRequestFindings(_ context.Context, read aggregate.ReadContext, q security.MergeRequestFindingsQuery) (security.MergeRequestFindingsPage, error) {
+	s.read, s.mrQuery, s.calls = read, q, s.calls+1
+	return s.mrPage, s.err
 }
 
 func serveSecurity(t *testing.T, h *SecurityHandler, method, target, body string) *httptest.ResponseRecorder {

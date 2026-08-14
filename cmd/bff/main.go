@@ -147,7 +147,9 @@ func main() {
 	// findings.summary.read and findings.triage; this handler forwards the
 	// session's verified identity and shapes only — counts, facets and triage
 	// transitions are all computed under server-derived authorization
-	// (SPEC-0026, SPEC-0027, T-0023).
+	// (SPEC-0026, SPEC-0027, T-0023). The MR findings route serves the same
+	// surface: attribution is the backend's derived state, never computed
+	// here (SPEC-0028, T-0024).
 	securityHandler := handlers.NewSecurity(security.New(securityv1.NewFindingsServiceClient(pdpConn)), sessions)
 
 	// Imported review history (SPEC-0011) is read through the same door. It is a
@@ -187,6 +189,7 @@ func main() {
 	mux.Handle("POST /api/v1/security/triage", securityHandler)
 	mux.Handle("GET /api/v1/security/findings/summary", securityHandler)
 	mux.Handle("GET /api/v1/security/dashboard", securityHandler)
+	mux.Handle("GET /api/v1/security/merge-requests/{merge_request_id}/findings", securityHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)

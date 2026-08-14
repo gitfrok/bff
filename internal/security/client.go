@@ -338,29 +338,36 @@ func (c *Client) ListFindings(ctx context.Context, read aggregate.ReadContext, f
 	}
 	page := FindingPage{Findings: make([]Finding, 0, len(response.GetFindings())), NextPageToken: response.GetNextPageToken()}
 	for _, m := range response.GetFindings() {
-		finding := Finding{
-			FindingID:           m.GetFindingId(),
-			RepositoryID:        m.GetRepositoryId(),
-			ScannerClass:        scannerClassName(m.GetScannerClass()),
-			ToolName:            m.GetToolName(),
-			ToolVersion:         m.GetToolVersion(),
-			RuleID:              m.GetRuleId(),
-			Severity:            severityName(m.GetSeverity()),
-			Lifecycle:           lifecycleName(m.GetLifecycle()),
-			FirstSeenScanID:     m.GetFirstSeenScanId(),
-			LastSeenScanID:      m.GetLastSeenScanId(),
-			Provenance:          m.GetProvenance(),
-			ProvenanceMediaType: m.GetProvenanceMediaType(),
-		}
-		if loc := m.GetLocation(); loc != nil {
-			finding.ArtifactPath = loc.GetArtifactPath()
-			finding.EnclosingContent = loc.GetEnclosingContent()
-			finding.Component = loc.GetComponent()
-			finding.ComponentVersion = loc.GetComponentVersion()
-		}
-		page.Findings = append(page.Findings, finding)
+		page.Findings = append(page.Findings, shapeFinding(m))
 	}
 	return page, nil
+}
+
+// shapeFinding maps one wire finding onto the browser shape field for field.
+// The adapter adds nothing and drops nothing; the location's fields travel
+// flat, as the dashboard consumes them.
+func shapeFinding(m *securityv1.Finding) Finding {
+	finding := Finding{
+		FindingID:           m.GetFindingId(),
+		RepositoryID:        m.GetRepositoryId(),
+		ScannerClass:        scannerClassName(m.GetScannerClass()),
+		ToolName:            m.GetToolName(),
+		ToolVersion:         m.GetToolVersion(),
+		RuleID:              m.GetRuleId(),
+		Severity:            severityName(m.GetSeverity()),
+		Lifecycle:           lifecycleName(m.GetLifecycle()),
+		FirstSeenScanID:     m.GetFirstSeenScanId(),
+		LastSeenScanID:      m.GetLastSeenScanId(),
+		Provenance:          m.GetProvenance(),
+		ProvenanceMediaType: m.GetProvenanceMediaType(),
+	}
+	if loc := m.GetLocation(); loc != nil {
+		finding.ArtifactPath = loc.GetArtifactPath()
+		finding.EnclosingContent = loc.GetEnclosingContent()
+		finding.Component = loc.GetComponent()
+		finding.ComponentVersion = loc.GetComponentVersion()
+	}
+	return finding
 }
 
 // ValidateFilters reports whether every named filter is one the contract

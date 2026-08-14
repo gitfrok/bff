@@ -28,6 +28,7 @@ type Security interface {
 	ListFindings(ctx context.Context, read aggregate.ReadContext, f security.Filters, pageSize int32, pageToken string) (security.FindingPage, error)
 	FindingsSummary(ctx context.Context, read aggregate.ReadContext, f security.Filters, dimensions []string) (security.Summary, error)
 	SetTriage(ctx context.Context, read aggregate.ReadContext, in security.TriageRequest) (security.Triage, error)
+	ListMergeRequestFindings(ctx context.Context, read aggregate.ReadContext, q security.MergeRequestFindingsQuery) (security.MergeRequestFindingsPage, error)
 }
 
 // SecurityHandler serves the unified security dashboard surface.
@@ -48,6 +49,7 @@ func (h *SecurityHandler) Routes() http.Handler {
 	mux.HandleFunc("POST /api/v1/security/triage", h.triage)
 	mux.HandleFunc("GET /api/v1/security/findings/summary", h.summary)
 	mux.HandleFunc("GET /api/v1/security/dashboard", h.dashboard)
+	mux.HandleFunc("GET /api/v1/security/merge-requests/{merge_request_id}/findings", h.mrFindings)
 	return mux
 }
 
