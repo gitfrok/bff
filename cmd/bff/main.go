@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	auditv1 "github.com/gitfrok/bff/gen/proto/audit/v1"
 	codereviewv1 "github.com/gitfrok/bff/gen/proto/codereview/v1"
 	identityv1 "github.com/gitfrok/bff/gen/proto/identity/v1"
 	policyv1 "github.com/gitfrok/bff/gen/proto/policy/v1"
@@ -19,6 +20,7 @@ import (
 	searchv1 "github.com/gitfrok/bff/gen/proto/search/v1"
 	securityv1 "github.com/gitfrok/bff/gen/proto/security/v1"
 	"github.com/gitfrok/bff/internal/aggregate"
+	"github.com/gitfrok/bff/internal/audit"
 	"github.com/gitfrok/bff/internal/browser"
 	"github.com/gitfrok/bff/internal/codereview"
 	"github.com/gitfrok/bff/internal/handlers"
@@ -152,6 +154,14 @@ func main() {
 	// here (SPEC-0028, T-0024).
 	securityHandler := handlers.NewSecurity(security.New(securityv1.NewFindingsServiceClient(pdpConn)), sessions)
 
+	// Audit (served by the data plane) shapes the date-ranged evidence pack
+	// surface. The backend is the PDP for evidence.pack.generate and
+	// evidence.pack.read: assembly is entirely server-determined and itself
+	// audited; this handler forwards the session's verified identity and
+	// shapes only, streaming each bounded pack chunk as it arrives
+	// (SPEC-0031, SPEC-0032, T-0026).
+	evidenceHandler := handlers.NewEvidence(audit.New(auditv1.NewEvidenceServiceClient(pdpConn)), sessions)
+
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
@@ -190,6 +200,9 @@ func main() {
 	mux.Handle("GET /api/v1/security/findings/summary", securityHandler)
 	mux.Handle("GET /api/v1/security/dashboard", securityHandler)
 	mux.Handle("GET /api/v1/security/merge-requests/{merge_request_id}/findings", securityHandler)
+	mux.Handle("POST /api/v1/audit/evidence-packs", evidenceHandler)
+	mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}/status", evidenceHandler)
+	mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}", evidenceHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
