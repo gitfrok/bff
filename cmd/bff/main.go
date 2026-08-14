@@ -17,6 +17,7 @@ import (
 	policyv1 "github.com/gitfrok/bff/gen/proto/policy/v1"
 	repositoryv1 "github.com/gitfrok/bff/gen/proto/repository/v1"
 	searchv1 "github.com/gitfrok/bff/gen/proto/search/v1"
+	securityv1 "github.com/gitfrok/bff/gen/proto/security/v1"
 	"github.com/gitfrok/bff/internal/aggregate"
 	"github.com/gitfrok/bff/internal/browser"
 	"github.com/gitfrok/bff/internal/codereview"
@@ -27,6 +28,7 @@ import (
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/repositoryreader"
 	"github.com/gitfrok/bff/internal/search"
+	"github.com/gitfrok/bff/internal/security"
 	"github.com/gitfrok/bff/internal/session"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -140,6 +142,14 @@ func main() {
 	// authorized match (SPEC-0034, SPEC-0035, T-0028).
 	searchHandler := handlers.NewSearch(search.New(searchv1.NewSearchServiceClient(pdpConn)), reader, sessions)
 
+	// Security/Findings (served by the data plane) shapes the unified
+	// security dashboard surface. The backend is the PDP for findings.read,
+	// findings.summary.read and findings.triage; this handler forwards the
+	// session's verified identity and shapes only — counts, facets and triage
+	// transitions are all computed under server-derived authorization
+	// (SPEC-0026, SPEC-0027, T-0023).
+	securityHandler := handlers.NewSecurity(security.New(securityv1.NewFindingsServiceClient(pdpConn)), sessions)
+
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
@@ -174,6 +184,9 @@ func main() {
 	mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
 	mux.Handle("POST /api/v1/search/query", searchHandler)
 	mux.Handle("GET /api/v1/search/status", searchHandler)
+	mux.Handle("POST /api/v1/security/triage", securityHandler)
+	mux.Handle("GET /api/v1/security/findings/summary", securityHandler)
+	mux.Handle("GET /api/v1/security/dashboard", securityHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
