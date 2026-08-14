@@ -19,6 +19,7 @@ import (
 	repositoryv1 "github.com/gitfrok/bff/gen/proto/repository/v1"
 	searchv1 "github.com/gitfrok/bff/gen/proto/search/v1"
 	securityv1 "github.com/gitfrok/bff/gen/proto/security/v1"
+	usagev1 "github.com/gitfrok/bff/gen/proto/usage/v1"
 	"github.com/gitfrok/bff/internal/aggregate"
 	"github.com/gitfrok/bff/internal/audit"
 	"github.com/gitfrok/bff/internal/browser"
@@ -33,6 +34,7 @@ import (
 	"github.com/gitfrok/bff/internal/search"
 	"github.com/gitfrok/bff/internal/security"
 	"github.com/gitfrok/bff/internal/session"
+	"github.com/gitfrok/bff/internal/usage"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
@@ -52,6 +54,10 @@ const (
 	sessionStoreEnv    = "GITFROK_SESSION_STORE"
 	sessionAddrEnv     = "GITFROK_SESSION_VALKEY_ADDR"
 	sessionPasswordEnv = "GITFROK_SESSION_VALKEY_PASSWORD"
+	// usageAddrEnv names the control plane door serving contracts/proto/usage/v1.
+	// Unset means the usage view surface is not mounted: the control plane's
+	// usage door is itself optional (GITFROK_USAGE_GRPC_ADDR over there).
+	usageAddrEnv = "GITFROK_USAGE_ADDR"
 )
 
 // decisionTTL bounds how long a cached decision may be reused.
@@ -171,6 +177,28 @@ func main() {
 	// shapes only (SPEC-0033, T-0027).
 	grantsHandler := handlers.NewAuditorGrants(identity.New(identityv1.NewAuditorGrantServiceClient(pdpConn)), sessions)
 
+	// Usage (served by the control plane) shapes the fair-use usage view.
+	// The backend is the metering authority and the PDP for usage.view.read
+	// (ADR-0061): the numbers are the same counters every envelope decision
+	// is made from, and this handler forwards the session's verified
+	// identity and shapes only — no number is computed, adjusted, or
+	// invented here, and unmeasured dimensions carry no number at all
+	// (SPEC-0041, T-0034). The door is optional: an unset address leaves
+	// the surface unmounted rather than serving a view with no authority
+	// behind it.
+	var usageHandler *handlers.UsageHandler
+	if usageAddr := os.Getenv(usageAddrEnv); usageAddr != "" {
+		usageConn, err := grpc.NewClient(usageAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot reach the usage service at %s: %v\n", usageAddr, err)
+			os.Exit(1)
+		}
+		defer func() { _ = usageConn.Close() }()
+		usageHandler = handlers.NewUsage(usage.New(usagev1.NewUsageServiceClient(usageConn)), sessions)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s is not set: the usage view surface is not mounted\n", usageAddrEnv)
+	}
+
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
@@ -215,6 +243,9 @@ func main() {
 	mux.Handle("POST /api/v1/audit/auditor-grants", grantsHandler)
 	mux.Handle("DELETE /api/v1/audit/auditor-grants/{grant_id}", grantsHandler)
 	mux.Handle("GET /api/v1/audit/auditor-grants", grantsHandler)
+	if usageHandler != nil {
+		mux.Handle("GET /api/v1/usage/view", usageHandler)
+	}
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
