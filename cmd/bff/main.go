@@ -16,14 +16,17 @@ import (
 	identityv1 "github.com/gitfrok/bff/gen/proto/identity/v1"
 	policyv1 "github.com/gitfrok/bff/gen/proto/policy/v1"
 	repositoryv1 "github.com/gitfrok/bff/gen/proto/repository/v1"
+	searchv1 "github.com/gitfrok/bff/gen/proto/search/v1"
 	"github.com/gitfrok/bff/internal/aggregate"
 	"github.com/gitfrok/bff/internal/browser"
 	"github.com/gitfrok/bff/internal/codereview"
+	"github.com/gitfrok/bff/internal/handlers"
 	"github.com/gitfrok/bff/internal/login"
 	"github.com/gitfrok/bff/internal/mr"
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/repositoryreader"
+	"github.com/gitfrok/bff/internal/search"
 	"github.com/gitfrok/bff/internal/session"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -130,6 +133,13 @@ func main() {
 	// Code Review (served by the data plane) shapes the MR surface.
 	review := codereview.New(codereviewv1.NewMergeRequestServiceClient(pdpConn))
 
+	// Code Search (served by the data plane) shapes the search surface. The
+	// backend is the PDP for search.read and search.index.status.read; this
+	// handler forwards the session's verified identity and shapes only, its
+	// one addition being the RepositoryReader metadata joined onto each
+	// authorized match (SPEC-0034, SPEC-0035, T-0028).
+	searchHandler := handlers.NewSearch(search.New(searchv1.NewSearchServiceClient(pdpConn)), reader, sessions)
+
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
@@ -162,6 +172,8 @@ func main() {
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
 	mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
+	mux.Handle("POST /api/v1/search/query", searchHandler)
+	mux.Handle("GET /api/v1/search/status", searchHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
