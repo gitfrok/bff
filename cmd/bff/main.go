@@ -24,6 +24,7 @@ import (
 	"github.com/gitfrok/bff/internal/browser"
 	"github.com/gitfrok/bff/internal/codereview"
 	"github.com/gitfrok/bff/internal/handlers"
+	"github.com/gitfrok/bff/internal/identity"
 	"github.com/gitfrok/bff/internal/login"
 	"github.com/gitfrok/bff/internal/mr"
 	"github.com/gitfrok/bff/internal/oidc"
@@ -162,6 +163,14 @@ func main() {
 	// (SPEC-0031, SPEC-0032, T-0026).
 	evidenceHandler := handlers.NewEvidence(audit.New(auditv1.NewEvidenceServiceClient(pdpConn)), sessions)
 
+	// Identity & Access (served by the data plane) shapes the auditor grant
+	// administration surface. The backend is the PDP for auditor.grant.manage:
+	// issuing, revoking and listing are owner-only decisions, each lifecycle
+	// action is itself audited, and grant state is a fact the backend reads at
+	// decision time; this handler forwards the session's verified identity and
+	// shapes only (SPEC-0033, T-0027).
+	grantsHandler := handlers.NewAuditorGrants(identity.New(identityv1.NewAuditorGrantServiceClient(pdpConn)), sessions)
+
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
@@ -203,6 +212,9 @@ func main() {
 	mux.Handle("POST /api/v1/audit/evidence-packs", evidenceHandler)
 	mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}/status", evidenceHandler)
 	mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}", evidenceHandler)
+	mux.Handle("POST /api/v1/audit/auditor-grants", grantsHandler)
+	mux.Handle("DELETE /api/v1/audit/auditor-grants/{grant_id}", grantsHandler)
+	mux.Handle("GET /api/v1/audit/auditor-grants", grantsHandler)
 	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
