@@ -192,7 +192,7 @@ func (p *PEP) store(key string, d Decision) {
 
 	if d.PolicyRevision != p.revision {
 		// Every entry here was decided under rules that no longer apply.
-		p.entries = make(map[string]entry, len(p.entries))
+		clear(p.entries)
 		p.revision = d.PolicyRevision
 	}
 
