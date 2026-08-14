@@ -26,6 +26,17 @@ func (s *stubPDP) Decide(_ context.Context, in *policyv1.DecideRequest, _ ...grp
 	return s.resp, s.err
 }
 
+// EvaluateDryRun completes the contract interface; the PEP never calls it — dry-run evaluation is
+// a backend-internal surface (T-0025), not an aggregation the BFF exposes.
+func (s *stubPDP) EvaluateDryRun(context.Context, *policyv1.EvaluateDryRunRequest, ...grpc.CallOption) (*policyv1.EvaluateDryRunResponse, error) {
+	return nil, errors.New("pep: EvaluateDryRun is not a BFF route")
+}
+
+// GetDecision completes the contract interface; the PEP never calls it.
+func (s *stubPDP) GetDecision(context.Context, *policyv1.GetDecisionRequest, ...grpc.CallOption) (*policyv1.GetDecisionResponse, error) {
+	return nil, errors.New("pep: GetDecision is not a BFF route")
+}
+
 func allowResp(rev string) *policyv1.DecideResponse {
 	return &policyv1.DecideResponse{Allowed: true, Reason: "allowed", PolicyRevision: rev, DecisionId: "01A"}
 }
