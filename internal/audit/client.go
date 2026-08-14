@@ -12,6 +12,8 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
+	"slices"
 	"time"
 
 	auditv1 "github.com/gitfrok/bff/gen/proto/audit/v1"
@@ -307,7 +309,7 @@ func contextOf(read aggregate.ReadContext) *auditv1.EvidenceContext {
 	return &auditv1.EvidenceContext{
 		TenantId:   read.TenantID,
 		ActorId:    read.ActorID,
-		ActorRoles: append([]string(nil), read.ActorRoles...),
+		ActorRoles: slices.Clone(read.ActorRoles),
 		RequestId:  read.RequestID,
 	}
 }
@@ -505,7 +507,7 @@ func shapeRecord(record *auditv1.ControlSectionRecord) ControlRecord {
 		shaped.ScanGate = &ScanGateDetail{
 			MergeRequestID:      detail.ScanGate.GetMergeRequestId(),
 			ScanID:              detail.ScanGate.GetScanId(),
-			ReliedUponTriageIDs: append([]string(nil), detail.ScanGate.GetReliedUponTriageIds()...),
+			ReliedUponTriageIDs: slices.Clone(detail.ScanGate.GetReliedUponTriageIds()),
 		}
 	case *auditv1.ControlSectionRecord_AccessChange:
 		shaped.AccessChange = &AccessChangeDetail{
@@ -542,10 +544,7 @@ func shapeAppendix(appendix *auditv1.AttestedAppendix) *Appendix {
 				ManifestDigest: event.GetManifestDigest(),
 			}
 			if len(event.GetRecordCounts()) > 0 {
-				imported.RecordCounts = make(map[string]int64, len(event.GetRecordCounts()))
-				for kind, count := range event.GetRecordCounts() {
-					imported.RecordCounts[kind] = count
-				}
+				imported.RecordCounts = maps.Clone(event.GetRecordCounts())
 			}
 			if t := event.GetOccurredAt(); t != nil {
 				imported.OccurredAt = t.AsTime()
