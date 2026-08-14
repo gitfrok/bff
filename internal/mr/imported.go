@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"cmp"
 	"context"
 	"net/http"
 	"strconv"
@@ -199,10 +200,7 @@ func importedViewOf(page codereview.ImportedHistoryPage) ImportedHistoryView {
 }
 
 func provenanceViewOf(provenance codereview.Provenance) ProvenanceView {
-	class := provenance.Class
-	if class == "" {
-		class = codereview.ClassUnspecified
-	}
+	class := cmp.Or(provenance.Class, codereview.ClassUnspecified)
 	return ProvenanceView{
 		Class:          class,
 		ImportID:       provenance.ImportID,

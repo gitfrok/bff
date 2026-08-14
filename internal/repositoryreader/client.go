@@ -4,7 +4,9 @@ package repositoryreader
 
 import (
 	"context"
+	"errors"
 	"io"
+	"slices"
 
 	repositoryv1 "github.com/gitfrok/bff/gen/proto/repository/v1"
 	"github.com/gitfrok/bff/internal/aggregate"
@@ -35,13 +37,13 @@ func (c *Client) File(ctx context.Context, read aggregate.ReadContext, revision,
 	}
 	for {
 		chunk, recvErr := stream.Recv()
-		if recvErr == io.EOF {
+		if errors.Is(recvErr, io.EOF) {
 			return nil
 		}
 		if recvErr != nil {
 			return recvErr
 		}
-		mapped := aggregate.FileChunk{Data: append([]byte(nil), chunk.GetData()...), EOF: chunk.GetEof()}
+		mapped := aggregate.FileChunk{Data: slices.Clone(chunk.GetData()), EOF: chunk.GetEof()}
 		if metadata := chunk.GetMetadata(); metadata != nil {
 			mapped.Metadata = &aggregate.FileMetadata{Path: metadata.GetPath(), ObjectID: metadata.GetObjectId(), Mode: metadata.GetMode(), SizeBytes: metadata.GetSizeBytes()}
 		}
@@ -61,13 +63,13 @@ func (c *Client) Diff(ctx context.Context, read aggregate.ReadContext, baseRevis
 	}
 	for {
 		chunk, recvErr := stream.Recv()
-		if recvErr == io.EOF {
+		if errors.Is(recvErr, io.EOF) {
 			return nil
 		}
 		if recvErr != nil {
 			return recvErr
 		}
-		mapped := aggregate.DiffChunk{Data: append([]byte(nil), chunk.GetData()...), EOF: chunk.GetEof()}
+		mapped := aggregate.DiffChunk{Data: slices.Clone(chunk.GetData()), EOF: chunk.GetEof()}
 		if err := send(mapped); err != nil {
 			return err
 		}

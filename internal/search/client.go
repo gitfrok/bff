@@ -9,6 +9,7 @@ package search
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	searchv1 "github.com/gitfrok/bff/gen/proto/search/v1"
@@ -97,7 +98,7 @@ func contextOf(read aggregate.ReadContext) *searchv1.SearchContext {
 	return &searchv1.SearchContext{
 		TenantId:   read.TenantID,
 		ActorId:    read.ActorID,
-		ActorRoles: append([]string(nil), read.ActorRoles...),
+		ActorRoles: slices.Clone(read.ActorRoles),
 		RequestId:  read.RequestID,
 	}
 }

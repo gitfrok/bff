@@ -9,6 +9,7 @@ package security
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	securityv1 "github.com/gitfrok/bff/gen/proto/security/v1"
@@ -180,7 +181,7 @@ func contextOf(read aggregate.ReadContext) *securityv1.FindingsContext {
 	return &securityv1.FindingsContext{
 		TenantId:   read.TenantID,
 		ActorId:    read.ActorID,
-		ActorRoles: append([]string(nil), read.ActorRoles...),
+		ActorRoles: slices.Clone(read.ActorRoles),
 		RequestId:  read.RequestID,
 	}
 }
@@ -437,7 +438,7 @@ func (c *Client) FindingsSummary(ctx context.Context, read aggregate.ReadContext
 		MinAgeDays:         f.MinAgeDays,
 		MaxAgeDays:         f.MaxAgeDays,
 		OwningTeamFilter:   f.OwningTeam,
-		FacetDimensions:    append([]string(nil), dimensions...),
+		FacetDimensions:    slices.Clone(dimensions),
 	})
 	if err != nil {
 		return Summary{}, err

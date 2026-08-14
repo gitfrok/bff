@@ -11,6 +11,7 @@ package identity
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 
 	identityv1 "github.com/gitfrok/bff/gen/proto/identity/v1"
@@ -111,7 +112,7 @@ func contextOf(read aggregate.ReadContext) *identityv1.AuditorGrantContext {
 	return &identityv1.AuditorGrantContext{
 		TenantId:   read.TenantID,
 		ActorId:    read.ActorID,
-		ActorRoles: append([]string(nil), read.ActorRoles...),
+		ActorRoles: slices.Clone(read.ActorRoles),
 		RequestId:  read.RequestID,
 	}
 }
@@ -132,7 +133,7 @@ func (c *Client) IssueGrant(ctx context.Context, read aggregate.ReadContext, in 
 		RangeFrom:          timestamppb.New(in.RangeFrom),
 		RangeTo:            timestamppb.New(in.RangeTo),
 		RepositoryId:       in.RepositoryID,
-		PackIds:            append([]string(nil), in.PackIDs...),
+		PackIds:            slices.Clone(in.PackIDs),
 		ExpiresAt:          timestamppb.New(in.ExpiresAt),
 	})
 	if err != nil {
@@ -189,7 +190,7 @@ func shapeGrant(grant *identityv1.AuditorGrant) Grant {
 		TenantID:           grant.GetTenantId(),
 		AuditorPrincipalID: grant.GetAuditorPrincipalId(),
 		RepositoryID:       grant.GetRepositoryId(),
-		PackIDs:            append([]string(nil), grant.GetPackIds()...),
+		PackIDs:            slices.Clone(grant.GetPackIds()),
 		GrantedBy:          grant.GetGrantedBy(),
 		State:              grantStateOf(grant.GetState()),
 	}
