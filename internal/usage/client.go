@@ -31,9 +31,13 @@ type Gap struct {
 // AC2, AC3). The shape deliberately cannot represent "unmeasured" as a
 // number.
 type DimensionView struct {
-	Dimension      string
-	Coverage       string // "METERED" or "DEFERRED"
-	State          string // meaningful only when Coverage is "METERED" and TelemetryGap is false
+	Dimension string
+	Coverage  string // "METERED" or "DEFERRED"
+	State     string // meaningful only when Coverage is "METERED" and TelemetryGap is false
+	// Trend names the direction the backend's counter moved (SPEC-0046
+	// AC2), shaped untouched from the wire; the empty string means the row
+	// has no number for a trend to describe (deferred or gapped).
+	Trend          string
 	Value          *float64
 	Envelope       *float64
 	Notification   *float64
@@ -57,10 +61,29 @@ type Divergence struct {
 	WindowEnd       time.Time
 }
 
+// ThrottleObservation is SPEC-0046 AC3's end-to-end throttle view as the
+// backend returned it: the METERED desired state and the APPLIED ack as two
+// separate halves. Present is false until the tenant has an evaluation;
+// AckedAt is nil until an ack is recorded — absence travels as absence,
+// never as zero or as "applied". Nothing here is computed or smoothed
+// (invariant 18).
+type ThrottleObservation struct {
+	Present                 bool
+	DesiredGeneration       int64
+	DesiredMaxCIConcurrency int32
+	DesiredQueueDepthCap    int64
+	HasAppliedAck           bool
+	AppliedGeneration       int64
+	Applied                 bool
+	AppliedError            string
+	AckedAt                 *time.Time
+}
+
 // View is the tenant's authorized usage view as the backend returned it.
 type View struct {
 	Dimensions  []DimensionView
 	Divergences []Divergence
+	Throttle    ThrottleObservation
 	GeneratedAt time.Time
 }
 
@@ -102,6 +125,11 @@ func (c *Client) GetUsageView(ctx context.Context, read aggregate.ReadContext) (
 	for _, dv := range response.GetDivergences() {
 		view.Divergences = append(view.Divergences, shapeDivergence(dv))
 	}
+	// SPEC-0046 AC3: the throttle observation rides only when the backend
+	// sent one — a tenant with no evaluation keeps the absent shape.
+	if obs := response.GetEnvelopeThrottle(); obs != nil {
+		view.Throttle = shapeThrottleObservation(obs)
+	}
 	return view, nil
 }
 
@@ -135,6 +163,9 @@ func shapeDimension(d *usagev1.UsageDimensionView) DimensionView {
 	if !row.TelemetryGap {
 		value, envelope, notification := d.GetCurrentValue(), d.GetEnvelopeValue(), d.GetNotificationValue()
 		row.Value, row.Envelope, row.Notification = &value, &envelope, &notification
+		// SPEC-0046 AC2: the trend travels alongside the number it
+		// describes — a gapped row keeps no trend either.
+		row.Trend = trendName(d.GetTrend())
 		if t := d.GetWindowStart(); t != nil {
 			start := t.AsTime()
 			row.WindowStart = &start
@@ -159,6 +190,29 @@ func shapeDivergence(dv *usagev1.UsageDivergence) Divergence {
 	}
 	if t := dv.GetWindowEnd(); t != nil {
 		out.WindowEnd = t.AsTime()
+	}
+	return out
+}
+
+// shapeThrottleObservation maps the wire observation onto the browser
+// shape field for field: the metered half always, the applied half only
+// once the backend records an ack.
+func shapeThrottleObservation(obs *usagev1.EnvelopeThrottleObservation) ThrottleObservation {
+	out := ThrottleObservation{
+		Present:                 true,
+		DesiredGeneration:       obs.GetDesiredGeneration(),
+		DesiredMaxCIConcurrency: obs.GetDesiredMaxCiConcurrency(),
+		DesiredQueueDepthCap:    obs.GetDesiredQueueDepthCap(),
+		HasAppliedAck:           obs.GetHasAppliedAck(),
+	}
+	if out.HasAppliedAck {
+		out.AppliedGeneration = obs.GetAppliedGeneration()
+		out.Applied = obs.GetApplied()
+		out.AppliedError = obs.GetAppliedError()
+		if t := obs.GetAckedAt(); t != nil {
+			acked := t.AsTime()
+			out.AckedAt = &acked
+		}
 	}
 	return out
 }
@@ -192,6 +246,21 @@ func stateName(wire agentv1.EnvelopeState) string {
 		return "NEAR"
 	case agentv1.EnvelopeState_ENVELOPE_STATE_EXCEEDED:
 		return "EXCEEDED"
+	default:
+		return ""
+	}
+}
+
+// trendName maps the contract trend enum onto its short name; an unnamed
+// value is the empty string, never an invented direction.
+func trendName(wire usagev1.EnvelopeTrend) string {
+	switch wire {
+	case usagev1.EnvelopeTrend_ENVELOPE_TREND_FLAT:
+		return "FLAT"
+	case usagev1.EnvelopeTrend_ENVELOPE_TREND_RISING:
+		return "RISING"
+	case usagev1.EnvelopeTrend_ENVELOPE_TREND_FALLING:
+		return "FALLING"
 	default:
 		return ""
 	}

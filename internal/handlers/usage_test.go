@@ -45,7 +45,7 @@ func TestUsageViewShapesCoverageAndGaps(t *testing.T) {
 	u := &stubUsage{view: usage.View{
 		GeneratedAt: end,
 		Dimensions: []usage.DimensionView{
-			{Dimension: "CI_MINUTES", Coverage: "METERED", State: "WITHIN", Value: f(42), Envelope: f(10000), Notification: f(8000), Unit: "minutes", WindowStart: &start, WindowEnd: &end},
+			{Dimension: "CI_MINUTES", Coverage: "METERED", State: "WITHIN", Trend: "FLAT", Value: f(42), Envelope: f(10000), Notification: f(8000), Unit: "minutes", WindowStart: &start, WindowEnd: &end},
 			{Dimension: "SEATS", Coverage: "DEFERRED", DeferredReason: "no authoritative telemetry source yet"},
 			{Dimension: "EGRESS", Coverage: "METERED", TelemetryGap: true, Gaps: []usage.Gap{{WindowStart: start, WindowEnd: end, Reason: "no telemetry received"}}},
 		},
@@ -57,7 +57,7 @@ func TestUsageViewShapesCoverageAndGaps(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
-		`"dimension":"CI_MINUTES"`, `"value":42`, `"envelope":10000`, `"notification":8000`,
+		`"dimension":"CI_MINUTES"`, `"value":42`, `"envelope":10000`, `"notification":8000`, `"trend":"FLAT"`,
 		`"dimension":"SEATS"`, `"coverage":"DEFERRED"`, `"deferred_reason":"no authoritative telemetry source yet"`,
 		`"dimension":"EGRESS"`, `"telemetry_gap":true`, `"reason":"no telemetry received"`,
 		`"data_plane_id":"plane-1"`, `"control_plane_value":100`, `"data_plane_reported_value":90`,
@@ -68,19 +68,69 @@ func TestUsageViewShapesCoverageAndGaps(t *testing.T) {
 	}
 	// AC2/AC3: the SEATS and EGRESS rows marshal no numeric field at all.
 	seats := body[strings.Index(body, `"dimension":"SEATS"`):strings.Index(body, `"dimension":"EGRESS"`)]
-	for _, banned := range []string{`"value":`, `"envelope":`, `"window_start":`, `"state":`} {
+	for _, banned := range []string{`"value":`, `"envelope":`, `"window_start":`, `"state":`, `"trend":`} {
 		if strings.Contains(seats, banned) {
 			t.Fatalf("deferred row renders a number: %s", seats)
 		}
 	}
 	egressIdx := strings.Index(body, `"dimension":"EGRESS"`)
 	egress := body[egressIdx : egressIdx+strings.Index(body[egressIdx:], `"gaps"`)]
-	if strings.Contains(egress, `"value":`) || strings.Contains(egress, `"window_start":`) {
-		t.Fatalf("gap row renders a number: %s", egress)
+	if strings.Contains(egress, `"value":`) || strings.Contains(egress, `"window_start":`) || strings.Contains(egress, `"trend":`) {
+		t.Fatalf("gap row renders a number or a trend: %s", egress)
 	}
 	// Identity came from the session, never from the request.
 	if u.read.TenantID != "tenant-a" || u.read.ActorID != "actor-a" || u.read.RequestID == "" {
 		t.Fatalf("usage context = %+v", u.read)
+	}
+}
+
+// SPEC-0046 AC3: the throttle observation marshals with its metered and
+// applied halves separate — absent entirely before an evaluation, the
+// applied fields absent before an ack, and a failed ack marshals
+// "applied":false with its error prose, never smoothed away.
+func TestUsageViewThrottleObservationJSON(t *testing.T) {
+	// No evaluation: the JSON carries no throttle key at all.
+	u := &stubUsage{view: usage.View{Dimensions: []usage.DimensionView{}}}
+	body := serveUsage(t, NewUsage(u, session()), "/api/v1/usage/view").Body.String()
+	if strings.Contains(body, `"throttle"`) {
+		t.Fatalf("an unevaluated tenant must marshal no throttle key: %s", body)
+	}
+
+	// Metered half only: no applied field may appear.
+	u = &stubUsage{view: usage.View{
+		Dimensions: []usage.DimensionView{},
+		Throttle: usage.ThrottleObservation{
+			Present: true, DesiredGeneration: 7, DesiredMaxCIConcurrency: 2, DesiredQueueDepthCap: 50,
+		},
+	}}
+	body = serveUsage(t, NewUsage(u, session()), "/api/v1/usage/view").Body.String()
+	for _, want := range []string{`"desired_generation":7`, `"desired_max_ci_concurrency":2`, `"desired_queue_depth_cap":50`, `"has_applied_ack":false`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
+	}
+	for _, banned := range []string{`"applied_generation"`, `"applied"`, `"acked_at"`} {
+		if strings.Contains(body, banned) {
+			t.Fatalf("unacked observation renders the applied half: %s", body)
+		}
+	}
+
+	// Failed ack: applied:false and the error prose both marshal.
+	acked := time.Date(2026, 8, 15, 12, 30, 0, 0, time.UTC)
+	gen, applied := int64(7), false
+	u = &stubUsage{view: usage.View{
+		Dimensions: []usage.DimensionView{},
+		Throttle: usage.ThrottleObservation{
+			Present: true, DesiredGeneration: 7, DesiredMaxCIConcurrency: 2, DesiredQueueDepthCap: 50,
+			HasAppliedAck: true, AppliedGeneration: gen, Applied: applied,
+			AppliedError: "scaler unavailable", AckedAt: &acked,
+		},
+	}}
+	body = serveUsage(t, NewUsage(u, session()), "/api/v1/usage/view").Body.String()
+	for _, want := range []string{`"has_applied_ack":true`, `"applied_generation":7`, `"applied":false`, `"applied_error":"scaler unavailable"`, `"acked_at":`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("body missing %s: %s", want, body)
+		}
 	}
 }
 

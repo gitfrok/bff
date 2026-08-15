@@ -59,9 +59,12 @@ type UsageGapView struct {
 // dimension or a telemetry gap marshals NO number at all, so a client
 // cannot mistake "unmeasured" for zero (SPEC-0041 AC2, AC3).
 type UsageDimensionView struct {
-	Dimension      string         `json:"dimension"`
-	Coverage       string         `json:"coverage"`
-	State          string         `json:"state,omitempty"`
+	Dimension string `json:"dimension"`
+	Coverage  string `json:"coverage"`
+	State     string `json:"state,omitempty"`
+	// Trend is marshalled only alongside a number: a deferred or gapped
+	// row has no trend to show (SPEC-0046 AC2).
+	Trend          string         `json:"trend,omitempty"`
 	Value          *float64       `json:"value,omitempty"`
 	Envelope       *float64       `json:"envelope,omitempty"`
 	Notification   *float64       `json:"notification,omitempty"`
@@ -85,13 +88,30 @@ type UsageDivergenceView struct {
 	WindowEnd       time.Time `json:"window_end"`
 }
 
+// UsageThrottleObservation is SPEC-0046 AC3's end-to-end throttle view.
+// The applied half is marshalled with pointers and omitempty: until the
+// data plane acks, the JSON carries no applied field at all — absence
+// renders as absence, never as "applied":false or as a zero generation.
+type UsageThrottleObservation struct {
+	DesiredGeneration       int64      `json:"desired_generation"`
+	DesiredMaxCIConcurrency int32      `json:"desired_max_ci_concurrency"`
+	DesiredQueueDepthCap    int64      `json:"desired_queue_depth_cap"`
+	HasAppliedAck           bool       `json:"has_applied_ack"`
+	AppliedGeneration       *int64     `json:"applied_generation,omitempty"`
+	Applied                 *bool      `json:"applied,omitempty"`
+	AppliedError            string     `json:"applied_error,omitempty"`
+	AckedAt                 *time.Time `json:"acked_at,omitempty"`
+}
+
 // UsageViewResponse is the JSON shape the usage endpoint returns.
 // Dimensions is never null: the list itself is the coverage statement
-// (SPEC-0041 AC2).
+// (SPEC-0041 AC2). Throttle is omitted entirely until the tenant has an
+// evaluation (SPEC-0046 AC3).
 type UsageViewResponse struct {
-	Dimensions  []UsageDimensionView  `json:"dimensions"`
-	Divergences []UsageDivergenceView `json:"divergences"`
-	GeneratedAt time.Time             `json:"generated_at"`
+	Dimensions  []UsageDimensionView      `json:"dimensions"`
+	Divergences []UsageDivergenceView     `json:"divergences"`
+	Throttle    *UsageThrottleObservation `json:"throttle,omitempty"`
+	GeneratedAt time.Time                 `json:"generated_at"`
 }
 
 func (h *UsageHandler) view(w http.ResponseWriter, r *http.Request) {
@@ -116,6 +136,7 @@ func (h *UsageHandler) view(w http.ResponseWriter, r *http.Request) {
 			Dimension:      d.Dimension,
 			Coverage:       d.Coverage,
 			State:          d.State,
+			Trend:          d.Trend,
 			Value:          d.Value,
 			Envelope:       d.Envelope,
 			Notification:   d.Notification,
@@ -140,6 +161,23 @@ func (h *UsageHandler) view(w http.ResponseWriter, r *http.Request) {
 			WindowStart:     dv.WindowStart,
 			WindowEnd:       dv.WindowEnd,
 		})
+	}
+	// SPEC-0046 AC3: the throttle observation appears only once the tenant
+	// has an evaluation; the applied half only once an ack is recorded.
+	if view.Throttle.Present {
+		obs := &UsageThrottleObservation{
+			DesiredGeneration:       view.Throttle.DesiredGeneration,
+			DesiredMaxCIConcurrency: view.Throttle.DesiredMaxCIConcurrency,
+			DesiredQueueDepthCap:    view.Throttle.DesiredQueueDepthCap,
+			HasAppliedAck:           view.Throttle.HasAppliedAck,
+		}
+		if view.Throttle.HasAppliedAck {
+			gen, applied := view.Throttle.AppliedGeneration, view.Throttle.Applied
+			obs.AppliedGeneration, obs.Applied = &gen, &applied
+			obs.AppliedError = view.Throttle.AppliedError
+			obs.AckedAt = view.Throttle.AckedAt
+		}
+		response.Throttle = obs
 	}
 	writeJSON(w, response)
 }

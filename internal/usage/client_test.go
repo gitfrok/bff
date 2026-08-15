@@ -65,6 +65,7 @@ func TestGetUsageViewShapesCoverageAndGaps(t *testing.T) {
 				Dimension:    agentv1.FairUseDimension_FAIR_USE_DIMENSION_CI_MINUTES,
 				Coverage:     usagev1.DimensionCoverage_DIMENSION_COVERAGE_METERED,
 				State:        agentv1.EnvelopeState_ENVELOPE_STATE_WITHIN,
+				Trend:        usagev1.EnvelopeTrend_ENVELOPE_TREND_FLAT,
 				CurrentValue: 42, EnvelopeValue: 10000, NotificationValue: 8000,
 				Unit: "minutes", WindowStart: timestamppb.New(start), WindowEnd: timestamppb.New(end),
 			},
@@ -98,6 +99,10 @@ func TestGetUsageViewShapesCoverageAndGaps(t *testing.T) {
 	if ci.Dimension != "CI_MINUTES" || ci.Coverage != "METERED" || ci.State != "WITHIN" {
 		t.Fatalf("metered row = %+v", ci)
 	}
+	// SPEC-0046 AC2: the metered row carries the wire's trend untouched.
+	if ci.Trend != "FLAT" {
+		t.Fatalf("metered trend = %q, want FLAT", ci.Trend)
+	}
 	if ci.Value == nil || *ci.Value != 42 || ci.Envelope == nil || *ci.Envelope != 10000 || ci.Notification == nil || *ci.Notification != 8000 {
 		t.Fatalf("metered numbers = %+v/%+v/%+v", ci.Value, ci.Envelope, ci.Notification)
 	}
@@ -109,16 +114,16 @@ func TestGetUsageViewShapesCoverageAndGaps(t *testing.T) {
 	if seats.Coverage != "DEFERRED" || seats.DeferredReason == "" {
 		t.Fatalf("deferred row = %+v", seats)
 	}
-	if seats.Value != nil || seats.Envelope != nil || seats.WindowStart != nil || seats.State != "" {
-		t.Fatalf("deferred row must carry no number, no state, no window: %+v", seats)
+	if seats.Value != nil || seats.Envelope != nil || seats.WindowStart != nil || seats.State != "" || seats.Trend != "" {
+		t.Fatalf("deferred row must carry no number, no state, no trend, no window: %+v", seats)
 	}
 
 	egress := view.Dimensions[2]
 	if !egress.TelemetryGap || len(egress.Gaps) != 1 || egress.Gaps[0].Reason == "" {
 		t.Fatalf("gap row = %+v", egress)
 	}
-	if egress.Value != nil || egress.WindowStart != nil {
-		t.Fatalf("gap row must carry no usable number: %+v", egress)
+	if egress.Value != nil || egress.WindowStart != nil || egress.Trend != "" {
+		t.Fatalf("gap row must carry no usable number and no trend: %+v", egress)
 	}
 
 	if len(view.Divergences) != 1 {
@@ -130,6 +135,57 @@ func TestGetUsageViewShapesCoverageAndGaps(t *testing.T) {
 	}
 	if view.GeneratedAt != end {
 		t.Fatalf("generated_at = %v, want %v", view.GeneratedAt, end)
+	}
+}
+
+// SPEC-0046 AC3: the throttle observation is shaped field for field with its
+// metered and applied halves kept separate — absent when the wire carries
+// none, the applied half absent until an ack, and a failed ack cited.
+func TestGetUsageViewShapesThrottleObservation(t *testing.T) {
+	// No observation on the wire: the absent shape stays absent.
+	view, err := New(&fakeService{resp: &usagev1.GetUsageViewResponse{}}).GetUsageView(context.Background(), read())
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	if view.Throttle.Present {
+		t.Fatal("no wire observation must yield an absent throttle shape")
+	}
+
+	acked := time.Date(2026, 8, 15, 12, 30, 0, 0, time.UTC)
+	resp := func(obs *usagev1.EnvelopeThrottleObservation) *usagev1.GetUsageViewResponse {
+		return &usagev1.GetUsageViewResponse{EnvelopeThrottle: obs}
+	}
+
+	// Metered half only: the applied half stays zero-valued and unacked.
+	view, err = New(&fakeService{resp: resp(&usagev1.EnvelopeThrottleObservation{
+		DesiredGeneration: 7, DesiredMaxCiConcurrency: 2, DesiredQueueDepthCap: 50,
+	})}).GetUsageView(context.Background(), read())
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	th := view.Throttle
+	if !th.Present || th.DesiredGeneration != 7 || th.DesiredMaxCIConcurrency != 2 || th.DesiredQueueDepthCap != 50 {
+		t.Fatalf("metered half = %+v", th)
+	}
+	if th.HasAppliedAck || th.Applied || th.AckedAt != nil {
+		t.Fatalf("the applied half must stay absent until an ack: %+v", th)
+	}
+
+	// Applied half with a FAILED ack: the error prose travels untouched.
+	view, err = New(&fakeService{resp: resp(&usagev1.EnvelopeThrottleObservation{
+		DesiredGeneration: 7, DesiredMaxCiConcurrency: 2, DesiredQueueDepthCap: 50,
+		HasAppliedAck: true, AppliedGeneration: 7, Applied: false,
+		AppliedError: "scaler unavailable", AckedAt: timestamppb.New(acked),
+	})}).GetUsageView(context.Background(), read())
+	if err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	th = view.Throttle
+	if !th.HasAppliedAck || th.AppliedGeneration != 7 || th.Applied || th.AppliedError != "scaler unavailable" {
+		t.Fatalf("applied half = %+v", th)
+	}
+	if th.AckedAt == nil || !th.AckedAt.Equal(acked) {
+		t.Fatalf("acked_at = %v, want %v", th.AckedAt, acked)
 	}
 }
 
