@@ -187,10 +187,14 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Roles are captured at login and re-read from the store on every request
+	// (ADR-0049 decision 8); dropping them here would start every session
+	// role-less and PDP-denied downstream.
 	id, err := h.sessions.Begin(r.Context(), aggregate.ReadContext{
-		TenantID:  principal.GetTenantId(),
-		ActorID:   principal.GetActorId(),
-		RequestID: newRequestID(),
+		TenantID:   principal.GetTenantId(),
+		ActorID:    principal.GetActorId(),
+		ActorRoles: principal.GetRoles(),
+		RequestID:  newRequestID(),
 	})
 	if err != nil {
 		http.Error(w, "login failed", http.StatusInternalServerError)
