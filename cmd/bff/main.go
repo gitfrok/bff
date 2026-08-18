@@ -13,6 +13,7 @@ import (
 	"time"
 
 	auditv1 "github.com/gitfrok/bff/gen/proto/audit/v1"
+	civ1 "github.com/gitfrok/bff/gen/proto/ci/v1"
 	codereviewv1 "github.com/gitfrok/bff/gen/proto/codereview/v1"
 	identityv1 "github.com/gitfrok/bff/gen/proto/identity/v1"
 	policyv1 "github.com/gitfrok/bff/gen/proto/policy/v1"
@@ -30,6 +31,7 @@ import (
 	"github.com/gitfrok/bff/internal/mr"
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
+	"github.com/gitfrok/bff/internal/pipelines"
 	"github.com/gitfrok/bff/internal/repositoryreader"
 	"github.com/gitfrok/bff/internal/repositoryregistry"
 	"github.com/gitfrok/bff/internal/search"
@@ -238,6 +240,11 @@ func main() {
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
 	mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
+	// The pipeline runs list (T-0060, SPEC-0054). There is deliberately no log
+	// route beside it: ADR-0072 defers retaining job output, and a door that
+	// exists and refuses is a promise nobody has made yet.
+	mux.Handle("GET /api/v1/pipelines/runs", handlers.NewPipelines(
+		pipelines.New(civ1.NewCIJobServiceClient(pdpConn)), sessions))
 	mux.Handle("POST /api/v1/search/query", searchHandler)
 	mux.Handle("GET /api/v1/search/status", searchHandler)
 	mux.Handle("POST /api/v1/security/triage", securityHandler)
