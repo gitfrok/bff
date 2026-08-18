@@ -310,3 +310,15 @@ func TestEveryRepositoryRefusalLooksTheSame(t *testing.T) {
 		t.Fatalf("refusals differ between causes: %v", bodies)
 	}
 }
+
+// History and blame arrived with T-0057; these stubs answer for them so the
+// existing journeys keep compiling. Each returns an error rather than an empty
+// page, so a test that starts exercising them fails loudly instead of quietly
+// asserting against nothing.
+func (s *stubReader) History(context.Context, aggregate.ReadContext, string, string, string, int32) (aggregate.HistoryPage, error) {
+	return aggregate.HistoryPage{}, errors.New("stub: History is not wired for this test")
+}
+
+func (s *stubReader) Blame(context.Context, aggregate.ReadContext, string, string) (aggregate.BlameResult, error) {
+	return aggregate.BlameResult{}, errors.New("stub: Blame is not wired for this test")
+}

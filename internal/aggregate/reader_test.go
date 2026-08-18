@@ -2,6 +2,7 @@ package aggregate
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -54,4 +55,16 @@ func TestRepositoryReaderShapesOnlyBackendResults(t *testing.T) {
 	if string(diff) != "patch" || !reflect.DeepEqual(backend.diffRequest, read) {
 		t.Fatalf("diff=%q context=%+v", diff, backend.diffRequest)
 	}
+}
+
+// History and blame arrived with T-0057; these stubs answer for them so the
+// existing journeys keep compiling. Each returns an error rather than an empty
+// page, so a test that starts exercising them fails loudly instead of quietly
+// asserting against nothing.
+func (s *stubReadBackend) History(context.Context, ReadContext, string, string, string, int32) (HistoryPage, error) {
+	return HistoryPage{}, errors.New("stub: History is not wired for this test")
+}
+
+func (s *stubReadBackend) Blame(context.Context, ReadContext, string, string) (BlameResult, error) {
+	return BlameResult{}, errors.New("stub: Blame is not wired for this test")
 }

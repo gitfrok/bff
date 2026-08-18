@@ -12,6 +12,7 @@
 package browser
 
 import (
+	"encoding/json"
 	"net/http"
 	"strconv"
 	"strings"
@@ -35,6 +36,8 @@ type Reader interface {
 	Tree(ctx context.Context, read aggregate.ReadContext, revision, pageToken string, pageSize int) (aggregate.TreePage, error)
 	File(ctx context.Context, read aggregate.ReadContext, revision, path string, send func(aggregate.FileChunk) error) error
 	Diff(ctx context.Context, read aggregate.ReadContext, baseRevision, headRevision, path string, send func(aggregate.DiffChunk) error) error
+	History(ctx context.Context, read aggregate.ReadContext, revision, path, pageToken string, pageSize int32) (aggregate.HistoryPage, error)
+	Blame(ctx context.Context, read aggregate.ReadContext, revision, path string) (aggregate.BlameResult, error)
 }
 
 // Handler serves the browser view routes.
@@ -59,6 +62,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/repositories/{repository_id}/tree", h.tree)
 	mux.HandleFunc("GET /v1/repositories/{repository_id}/file", h.file)
 	mux.HandleFunc("GET /v1/repositories/{repository_id}/diff", h.diff)
+	mux.HandleFunc("GET /v1/repositories/{repository_id}/history", h.history)
+	mux.HandleFunc("GET /v1/repositories/{repository_id}/blame", h.blame)
 	return mux
 }
 
@@ -327,4 +332,120 @@ func kind(entry aggregate.EntryKind) bffv1.BrowserEntryKind {
 	default:
 		return bffv1.BrowserEntryKind_BROWSER_ENTRY_KIND_UNSPECIFIED
 	}
+}
+
+// --- history and blame (T-0057, SPEC-0053 AC9) ----------------------------
+//
+// Every identity field keeps its git_ prefix through the JSON. That is the
+// point at which a consumer decides what a name means, and a field called
+// "author" would let the layer above render an unverified string as an
+// account. The platform knows who PUSHED; it does not know who this says wrote
+// the line, and the naming carries that all the way to the browser.
+
+// CommitIdentityView is git's word for who authored and committed.
+type CommitIdentityView struct {
+	GitAuthorName     string `json:"git_author_name"`
+	GitAuthorEmail    string `json:"git_author_email"`
+	GitCommitterName  string `json:"git_committer_name"`
+	GitCommitterEmail string `json:"git_committer_email"`
+	AuthoredAt        string `json:"authored_at"`
+	CommittedAt       string `json:"committed_at"`
+}
+
+// CommitView is one entry of a ref's history.
+type CommitView struct {
+	CommitID string             `json:"commit_id"`
+	Identity CommitIdentityView `json:"identity"`
+	Subject  string             `json:"subject"`
+}
+
+// HistoryView is one page of commits. It carries no total: the walk has no end
+// the server has counted, and a figure here would be invented.
+type HistoryView struct {
+	Commits       []CommitView `json:"commits"`
+	NextPageToken string       `json:"next_page_token"`
+}
+
+// BlameRangeView is one contiguous run of lines attributed to one commit.
+type BlameRangeView struct {
+	StartLine int32              `json:"start_line"`
+	EndLine   int32              `json:"end_line"`
+	CommitID  string             `json:"commit_id"`
+	Identity  CommitIdentityView `json:"identity"`
+}
+
+// BlameView carries the ranges and whether the file outran the server's cap.
+type BlameView struct {
+	Ranges []BlameRangeView `json:"ranges"`
+	Capped bool             `json:"capped"`
+}
+
+func identityView(i aggregate.CommitIdentity) CommitIdentityView {
+	return CommitIdentityView{
+		GitAuthorName:     i.GitAuthorName,
+		GitAuthorEmail:    i.GitAuthorEmail,
+		GitCommitterName:  i.GitCommitterName,
+		GitCommitterEmail: i.GitCommitterEmail,
+		AuthoredAt:        i.AuthoredAt,
+		CommittedAt:       i.CommittedAt,
+	}
+}
+
+func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
+	read, revision, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	size, ok := pageSize(r.URL.Query().Get("page_size"))
+	if !ok {
+		unavailable(w)
+		return
+	}
+	page, err := h.reader.History(r.Context(), read, revision,
+		r.URL.Query().Get("path"), r.URL.Query().Get("page_token"), int32(size))
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	view := HistoryView{Commits: make([]CommitView, 0, len(page.Commits)), NextPageToken: page.NextPageToken}
+	for _, commit := range page.Commits {
+		view.Commits = append(view.Commits, CommitView{
+			CommitID: commit.CommitID, Identity: identityView(commit.Identity), Subject: commit.Subject,
+		})
+	}
+	writeJSONView(w, view)
+}
+
+func (h *Handler) blame(w http.ResponseWriter, r *http.Request) {
+	read, revision, ok := h.begin(w, r)
+	if !ok {
+		return
+	}
+	result, err := h.reader.Blame(r.Context(), read, revision, r.URL.Query().Get("path"))
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	view := BlameView{Ranges: make([]BlameRangeView, 0, len(result.Ranges)), Capped: result.Capped}
+	for _, rng := range result.Ranges {
+		view.Ranges = append(view.Ranges, BlameRangeView{
+			StartLine: rng.StartLine, EndLine: rng.EndLine, CommitID: rng.CommitID,
+			Identity: identityView(rng.Identity),
+		})
+	}
+	writeJSONView(w, view)
+}
+
+// writeJSONView emits a plain-JSON view. The tree and file surfaces marshal
+// protobuf views through protojson; these two are BFF-shaped structs, so they
+// go out as ordinary JSON with the same private, no-store posture.
+func writeJSONView(w http.ResponseWriter, view any) {
+	body, err := json.Marshal(view)
+	if err != nil {
+		unavailable(w)
+		return
+	}
+	private(w)
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(body)
 }

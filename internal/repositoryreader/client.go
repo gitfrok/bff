@@ -97,3 +97,73 @@ func kindOf(kind repositoryv1.EntryKind) aggregate.EntryKind {
 }
 
 var _ aggregate.ReadBackend = (*Client)(nil)
+
+// --- history and blame (T-0057, SPEC-0053) --------------------------------
+//
+// Both shape and forward. The identity fields keep their git_* names all the
+// way through this layer for the reason the contract gives them: a commit's
+// author is whatever the committer's git config said, git verifies none of it,
+// and a field called `author` here would invite the layer above to render it
+// as an account.
+
+func identityOf(i *repositoryv1.CommitIdentity) aggregate.CommitIdentity {
+	return aggregate.CommitIdentity{
+		GitAuthorName:     i.GetGitAuthorName(),
+		GitAuthorEmail:    i.GetGitAuthorEmail(),
+		GitCommitterName:  i.GetGitCommitterName(),
+		GitCommitterEmail: i.GetGitCommitterEmail(),
+		AuthoredAt:        i.GetAuthoredAt(),
+		CommittedAt:       i.GetCommittedAt(),
+	}
+}
+
+// History reads one ref's commits, optionally narrowed to a path.
+func (c *Client) History(ctx context.Context, read aggregate.ReadContext, revision, path, pageToken string, pageSize int32) (aggregate.HistoryPage, error) {
+	response, err := c.reader.GetHistory(ctx, &repositoryv1.GetHistoryRequest{
+		Context:   contextOf(read),
+		Revision:  revision,
+		Path:      path,
+		PageToken: pageToken,
+		PageSize:  pageSize,
+	})
+	if err != nil {
+		return aggregate.HistoryPage{}, err
+	}
+	page := aggregate.HistoryPage{
+		Commits:       make([]aggregate.Commit, 0, len(response.GetCommits())),
+		NextPageToken: response.GetNextPageToken(),
+	}
+	for _, commit := range response.GetCommits() {
+		page.Commits = append(page.Commits, aggregate.Commit{
+			CommitID: commit.GetCommitId(),
+			Identity: identityOf(commit.GetIdentity()),
+			Subject:  commit.GetSubject(),
+		})
+	}
+	return page, nil
+}
+
+// Blame attributes one file's lines at a revision.
+func (c *Client) Blame(ctx context.Context, read aggregate.ReadContext, revision, path string) (aggregate.BlameResult, error) {
+	response, err := c.reader.GetBlame(ctx, &repositoryv1.GetBlameRequest{
+		Context:  contextOf(read),
+		Revision: revision,
+		Path:     path,
+	})
+	if err != nil {
+		return aggregate.BlameResult{}, err
+	}
+	result := aggregate.BlameResult{
+		Ranges: make([]aggregate.BlameRange, 0, len(response.GetRanges())),
+		Capped: response.GetCapped(),
+	}
+	for _, r := range response.GetRanges() {
+		result.Ranges = append(result.Ranges, aggregate.BlameRange{
+			StartLine: r.GetStartLine(),
+			EndLine:   r.GetEndLine(),
+			CommitID:  r.GetCommitId(),
+			Identity:  identityOf(r.GetIdentity()),
+		})
+	}
+	return result, nil
+}
