@@ -32,6 +32,7 @@ import (
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/pipelines"
+	"github.com/gitfrok/bff/internal/policyview"
 	"github.com/gitfrok/bff/internal/repositoryreader"
 	"github.com/gitfrok/bff/internal/repositoryregistry"
 	"github.com/gitfrok/bff/internal/search"
@@ -243,6 +244,12 @@ func main() {
 	// The pipeline runs list (T-0060, SPEC-0054). There is deliberately no log
 	// route beside it: ADR-0072 defers retaining job output, and a door that
 	// exists and refuses is a promise nobody has made yet.
+	// Policy visibility (T-0062, SPEC-0055). Reads only, and there is no write
+	// route beside them: ADR-0073 records that authoring is structurally absent,
+	// and a route that accepts a policy and refuses it would be a promise.
+	policyReads := handlers.NewPolicy(policyview.New(policyv1.NewPolicyDecisionPointClient(pdpConn)), sessions)
+	mux.Handle("GET /api/v1/policy/bundle", policyReads)
+	mux.Handle("GET /api/v1/policy/decisions/{decision_id}", policyReads)
 	mux.Handle("GET /api/v1/pipelines/runs", handlers.NewPipelines(
 		pipelines.New(civ1.NewCIJobServiceClient(pdpConn)), sessions))
 	mux.Handle("POST /api/v1/search/query", searchHandler)

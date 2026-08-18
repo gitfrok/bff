@@ -359,3 +359,10 @@ func mustDecide(t *testing.T, p *PEP, r Request) Decision {
 	}
 	return got
 }
+
+// GetBundleStatus arrived with T-0062; this stub answers for it so the PEP's
+// own journeys keep compiling. It errors rather than returning an empty
+// status, so a test that starts exercising it fails loudly.
+func (s *stubPDP) GetBundleStatus(context.Context, *policyv1.GetBundleStatusRequest, ...grpc.CallOption) (*policyv1.GetBundleStatusResponse, error) {
+	return nil, errors.New("stub: GetBundleStatus is not wired for this test")
+}
