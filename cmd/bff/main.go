@@ -31,6 +31,7 @@ import (
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/repositoryreader"
+	"github.com/gitfrok/bff/internal/repositoryregistry"
 	"github.com/gitfrok/bff/internal/search"
 	"github.com/gitfrok/bff/internal/security"
 	"github.com/gitfrok/bff/internal/session"
@@ -225,6 +226,12 @@ func main() {
 	// browser prefix instead of conflicting with it.
 	mux := http.NewServeMux()
 	mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
+	// The repository LIST, on /v1/repositories with no trailing slash. It is a
+	// distinct pattern from the browser prefix above, which matches
+	// /v1/repositories/... — a list names no repository, so it sits one level
+	// up (T-0054, SPEC-0052).
+	mux.Handle("GET /v1/repositories", handlers.NewRepositories(
+		repositoryregistry.New(repositoryv1.NewRepositoryRegistryClient(pdpConn)), sessions))
 	mrHandler := mr.New(review, imports, sessions)
 	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
