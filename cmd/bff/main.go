@@ -294,6 +294,11 @@ func main() {
 	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
+	// Referencing an issue in the customer's own tracker (T-0075, SPEC-0059). Two
+	// writes and no read of its own: the reference travels on the merge request,
+	// because there is no issue surface for it to belong to.
+	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues", mrHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues/unlink", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
 	mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
 	// The pipeline runs list (T-0060, SPEC-0054). There is deliberately no log

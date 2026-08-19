@@ -17,6 +17,8 @@ import (
 
 	"github.com/gitfrok/bff/internal/aggregate"
 	"github.com/gitfrok/bff/internal/codereview"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // Session resolves the verified identity a request runs under, as in the
@@ -33,6 +35,12 @@ type MergeRequests interface {
 	Create(context.Context, aggregate.ReadContext, string, string, string, string) (*codereview.MergeRequest, error)
 	SubmitReview(context.Context, aggregate.ReadContext, string, string, string, string, int64) (*codereview.MergeRequest, error)
 	Merge(context.Context, aggregate.ReadContext, string, int64) (*codereview.MergeRequest, error)
+	// LinkExternalIssue and UnlinkExternalIssue reference an issue in the customer's
+	// own tracker (SPEC-0059). They are on this port because a reference is a
+	// property of a merge request — there is no issue surface for them to belong to,
+	// which is ADR-0074's accepted scope.
+	LinkExternalIssue(context.Context, aggregate.ReadContext, string, string, string, string) (*codereview.MergeRequest, error)
+	UnlinkExternalIssue(context.Context, aggregate.ReadContext, string, string, string) (*codereview.MergeRequest, error)
 }
 
 // Handler serves the minimal MR surface.
@@ -63,6 +71,19 @@ type MRView struct {
 	HeadRevision   string    `json:"head_revision"`
 	Version        int64     `json:"version"`
 	CreatedAt      time.Time `json:"created_at"`
+	// ExternalIssues are pointers to issues in the customer's tracker (SPEC-0059).
+	// There is no title, status or assignee field here, and a test asserts the body
+	// carries none: this product references issues, it does not store them.
+	ExternalIssues []ExternalIssueView `json:"external_issues"`
+}
+
+// ExternalIssueView is one reference as the browser reads it.
+type ExternalIssueView struct {
+	Tracker  string `json:"tracker"`
+	IssueKey string `json:"issue_key"`
+	URL      string `json:"url"`
+	LinkedBy string `json:"linked_by"`
+	LinkedAt string `json:"linked_at"`
 }
 
 // Routes returns the MR surface.
@@ -72,6 +93,8 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests", h.create)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", h.review)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", h.merge)
+	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues", h.linkExternalIssue)
+	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues/unlink", h.unlinkExternalIssue)
 	mux.HandleFunc("GET /v1/repositories/{repository_id}/imports/{import_id}/history", h.importedHistory)
 	return mux
 }
@@ -176,6 +199,78 @@ func (h *Handler) merge(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, viewOf(mr))
 }
 
+// linkExternalIssue references an issue that lives elsewhere. A form, as every other
+// write on this frontend's behalf is.
+func (h *Handler) linkExternalIssue(w http.ResponseWriter, r *http.Request) {
+	read, ok := h.beginWrite(w, r)
+	if !ok {
+		return
+	}
+	mr, err := h.client.LinkExternalIssue(r.Context(), read,
+		r.PathValue("merge_request_id"),
+		r.PostFormValue("tracker"), r.PostFormValue("issue_key"), r.PostFormValue("url"))
+	if err != nil {
+		referenceRefusal(w, err)
+		return
+	}
+	writeJSON(w, viewOf(mr))
+}
+
+// unlinkExternalIssue removes a reference by tracker and key. A separate route rather
+// than a DELETE, because this is a plain HTML form and a form cannot issue one.
+func (h *Handler) unlinkExternalIssue(w http.ResponseWriter, r *http.Request) {
+	read, ok := h.beginWrite(w, r)
+	if !ok {
+		return
+	}
+	mr, err := h.client.UnlinkExternalIssue(r.Context(), read,
+		r.PathValue("merge_request_id"), r.PostFormValue("tracker"), r.PostFormValue("issue_key"))
+	if err != nil {
+		referenceRefusal(w, err)
+		return
+	}
+	writeJSON(w, viewOf(mr))
+}
+
+// beginWrite resolves the session and parses the form for a write on this surface.
+func (h *Handler) beginWrite(w http.ResponseWriter, r *http.Request) (aggregate.ReadContext, bool) {
+	read, ok := h.session.ReadContext(r)
+	if !ok || read.TenantID == "" || read.ActorID == "" {
+		denied(w)
+		return aggregate.ReadContext{}, false
+	}
+	read.RepositoryID = r.PathValue("repository_id")
+	if !validHandle(read.RepositoryID) {
+		denied(w)
+		return aggregate.ReadContext{}, false
+	}
+	if err := r.ParseForm(); err != nil {
+		denied(w)
+		return aggregate.ReadContext{}, false
+	}
+	read.RequestID = newRequestID()
+	return read, true
+}
+
+// referenceRefusal keeps the two outcomes the backend distinguishes and collapses
+// everything else.
+//
+// A malformed reference and a full list are both facts about what the caller just
+// sent or is already looking at, so naming them discloses nothing. Whether the merge
+// request exists stays the coarse refusal.
+func referenceRefusal(w http.ResponseWriter, err error) {
+	switch status.Code(err) {
+	case codes.InvalidArgument:
+		w.Header().Set("Cache-Control", "private, no-store")
+		http.Error(w, "a reference needs a tracker, an issue key and an https URL", http.StatusBadRequest)
+	case codes.ResourceExhausted:
+		w.Header().Set("Cache-Control", "private, no-store")
+		http.Error(w, "this merge request has as many issue references as it can carry", http.StatusConflict)
+	default:
+		denied(w)
+	}
+}
+
 func viewOf(mr *codereview.MergeRequest) MRView {
 	return MRView{
 		MergeRequestID: mr.MergeRequestID, RepositoryID: mr.RepositoryID,
@@ -183,7 +278,20 @@ func viewOf(mr *codereview.MergeRequest) MRView {
 		Title: mr.Title, Description: mr.Description,
 		CreatorID: mr.CreatorID, State: mr.State,
 		HeadRevision: mr.HeadRevision, Version: mr.Version, CreatedAt: mr.CreatedAt,
+		ExternalIssues: externalIssueViews(mr.ExternalIssues),
 	}
+}
+
+// externalIssueViews shapes the references for the browser.
+func externalIssueViews(references []codereview.ExternalIssue) []ExternalIssueView {
+	out := make([]ExternalIssueView, 0, len(references))
+	for _, reference := range references {
+		out = append(out, ExternalIssueView{
+			Tracker: reference.Tracker, IssueKey: reference.IssueKey, URL: reference.URL,
+			LinkedBy: reference.LinkedBy, LinkedAt: reference.LinkedAt,
+		})
+	}
+	return out
 }
 
 func writeJSON(w http.ResponseWriter, v any) {

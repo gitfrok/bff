@@ -34,6 +34,23 @@ type MergeRequest struct {
 	HeadRevision   string
 	Version        int64
 	CreatedAt      time.Time
+	// ExternalIssues are references to issues in the customer's own tracker
+	// (SPEC-0059). Pointers, not copies: there is no title and no state here,
+	// because nothing in this product asks the tracker anything.
+	ExternalIssues []ExternalIssue
+}
+
+// ExternalIssue is one reference to an issue this product does not store.
+//
+// URL is what a reader clicks. The frontend renders it only when it is https —
+// refused in the backend's domain and refused again there, because a link a person
+// clicks from inside the product is worth refusing twice.
+type ExternalIssue struct {
+	Tracker  string
+	IssueKey string
+	URL      string
+	LinkedBy string
+	LinkedAt string
 }
 
 // ReviewContext is the verified identity the backend's ReviewCommandContext
@@ -112,6 +129,60 @@ func (c *Client) Merge(ctx context.Context, read aggregate.ReadContext, mergeReq
 	return shape(response.GetMergeRequest()), nil
 }
 
+// LinkExternalIssue references an issue that lives in the customer's tracker.
+//
+// Nothing here validates the URL beyond forwarding it: the backend's domain is the
+// authority on what may be stored, and a second opinion at this layer would be a
+// second place the rule lives. What this layer does do is keep the refusal legible —
+// see the handler's mapping of InvalidArgument.
+func (c *Client) LinkExternalIssue(ctx context.Context, read aggregate.ReadContext, mergeRequestID, tracker, issueKey, issueURL string) (*MergeRequest, error) {
+	response, err := c.service.LinkExternalIssue(ctx, &codereviewv1.LinkExternalIssueRequest{
+		Context:        c.contextOf(read),
+		MergeRequestId: mergeRequestID,
+		Tracker:        tracker,
+		IssueKey:       issueKey,
+		Url:            issueURL,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// UnlinkExternalIssue removes a reference by tracker and key — its identity, never a
+// position in a list.
+func (c *Client) UnlinkExternalIssue(ctx context.Context, read aggregate.ReadContext, mergeRequestID, tracker, issueKey string) (*MergeRequest, error) {
+	response, err := c.service.UnlinkExternalIssue(ctx, &codereviewv1.UnlinkExternalIssueRequest{
+		Context:        c.contextOf(read),
+		MergeRequestId: mergeRequestID,
+		Tracker:        tracker,
+		IssueKey:       issueKey,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// shapeExternalIssues shapes the references. There is no field here that could carry
+// what an issue says: check 18 keeps the wire free of one.
+func shapeExternalIssues(references []*codereviewv1.ExternalIssue) []ExternalIssue {
+	if len(references) == 0 {
+		return nil
+	}
+	out := make([]ExternalIssue, 0, len(references))
+	for _, reference := range references {
+		out = append(out, ExternalIssue{
+			Tracker:  reference.GetTracker(),
+			IssueKey: reference.GetIssueKey(),
+			URL:      reference.GetUrl(),
+			LinkedBy: reference.GetLinkedBy(),
+			LinkedAt: reference.GetLinkedAt(),
+		})
+	}
+	return out
+}
+
 // SetProtection replaces the exact-ref branch protection rule.
 func (c *Client) SetProtection(ctx context.Context, read aggregate.ReadContext, targetRef string, requiredApprovals int32, expectedVersion int64) error {
 	_, err := c.service.SetBranchProtection(ctx, &codereviewv1.SetBranchProtectionRequest{
@@ -142,6 +213,7 @@ func shape(mr *codereviewv1.MergeRequest) *MergeRequest {
 		State:          mr.GetState().String(),
 		HeadRevision:   mr.GetHeadRevision(),
 		Version:        mr.GetVersion(),
+		ExternalIssues: shapeExternalIssues(mr.GetExternalIssues()),
 		CreatedAt:      created,
 	}
 }

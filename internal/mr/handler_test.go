@@ -31,6 +31,11 @@ func session() stubSession {
 type stubClient struct {
 	mr  *codereview.MergeRequest
 	err error
+	// What the external-issue routes forwarded (SPEC-0059).
+	linked     codereview.ExternalIssue
+	unlinked   codereview.ExternalIssue
+	linkedTo   string
+	linkedRead aggregate.ReadContext
 }
 
 func (s *stubClient) Get(_ context.Context, _ aggregate.ReadContext, _ string) (*codereview.MergeRequest, error) {
@@ -47,6 +52,29 @@ func (s *stubClient) SubmitReview(_ context.Context, _ aggregate.ReadContext, _,
 
 func (s *stubClient) Merge(_ context.Context, _ aggregate.ReadContext, _ string, _ int64) (*codereview.MergeRequest, error) {
 	return s.mr, s.err
+}
+
+// The external-issue methods are on the port, so the stub fills them (SPEC-0059).
+// It records what it was asked, because what this layer forwards is the whole of what
+// it is responsible for.
+func (s *stubClient) LinkExternalIssue(_ context.Context, read aggregate.ReadContext, mergeRequestID, tracker, issueKey, issueURL string) (*codereview.MergeRequest, error) {
+	s.linkedRead = read
+	s.linked = codereview.ExternalIssue{Tracker: tracker, IssueKey: issueKey, URL: issueURL}
+	s.linkedTo = mergeRequestID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.mr, nil
+}
+
+func (s *stubClient) UnlinkExternalIssue(_ context.Context, read aggregate.ReadContext, mergeRequestID, tracker, issueKey string) (*codereview.MergeRequest, error) {
+	s.linkedRead = read
+	s.unlinked = codereview.ExternalIssue{Tracker: tracker, IssueKey: issueKey}
+	s.linkedTo = mergeRequestID
+	if s.err != nil {
+		return nil, s.err
+	}
+	return s.mr, nil
 }
 
 func serve(t *testing.T, s Session, c MergeRequests, method, target string) *httptest.ResponseRecorder {
