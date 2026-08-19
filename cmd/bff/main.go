@@ -17,6 +17,7 @@ import (
 	codereviewv1 "github.com/gitfrok/bff/gen/proto/codereview/v1"
 	identityv1 "github.com/gitfrok/bff/gen/proto/identity/v1"
 	policyv1 "github.com/gitfrok/bff/gen/proto/policy/v1"
+	releasev1 "github.com/gitfrok/bff/gen/proto/release/v1"
 	repositoryv1 "github.com/gitfrok/bff/gen/proto/repository/v1"
 	searchv1 "github.com/gitfrok/bff/gen/proto/search/v1"
 	securityv1 "github.com/gitfrok/bff/gen/proto/security/v1"
@@ -33,6 +34,7 @@ import (
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/pipelines"
 	"github.com/gitfrok/bff/internal/policyview"
+	"github.com/gitfrok/bff/internal/releases"
 	"github.com/gitfrok/bff/internal/repositoryreader"
 	"github.com/gitfrok/bff/internal/repositoryregistry"
 	"github.com/gitfrok/bff/internal/search"
@@ -235,6 +237,18 @@ func main() {
 	// up (T-0054, SPEC-0052).
 	mux.Handle("GET /v1/repositories", handlers.NewRepositories(
 		repositoryregistry.New(repositoryv1.NewRepositoryRegistryClient(pdpConn)), sessions))
+	// Releases: tags, and the records announced against them (T-0065, SPEC-0056).
+	// There is deliberately no artifact route beside these — ADR-0075 accepted
+	// tags and notes only.
+	releaseHandler := handlers.NewReleases(
+		releases.New(releasev1.NewReleaseServiceClient(pdpConn), repositoryv1.NewRepositoryReaderClient(readerConn)),
+		sessions)
+	mux.Handle("GET /v1/repositories/{repository_id}/tags", releaseHandler)
+	mux.Handle("GET /v1/repositories/{repository_id}/releases", releaseHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/releases", releaseHandler)
+	mux.Handle("GET /v1/repositories/{repository_id}/releases/{tag}", releaseHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/releases/{tag}/notes", releaseHandler)
+
 	mrHandler := mr.New(review, imports, sessions)
 	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
