@@ -35,6 +35,7 @@ import (
 	"github.com/gitfrok/bff/internal/pipelines"
 	"github.com/gitfrok/bff/internal/policyview"
 	"github.com/gitfrok/bff/internal/releases"
+	"github.com/gitfrok/bff/internal/reposettings"
 	"github.com/gitfrok/bff/internal/repositoryreader"
 	"github.com/gitfrok/bff/internal/repositoryregistry"
 	"github.com/gitfrok/bff/internal/search"
@@ -248,6 +249,15 @@ func main() {
 	mux.Handle("POST /v1/repositories/{repository_id}/releases", releaseHandler)
 	mux.Handle("GET /v1/repositories/{repository_id}/releases/{tag}", releaseHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/releases/{tag}/notes", releaseHandler)
+	// Repository settings: name, description and the archived label (T-0069, SPEC-0057). There is
+	// deliberately no visibility route, no members route and no delete route — ADR-0076 accepted
+	// name, description and archival only, and a door that exists and refuses is a promise nobody
+	// has made.
+	settingsHandler := handlers.NewRepoSettings(
+		reposettings.New(repositoryv1.NewRepositorySettingsClient(pdpConn)), sessions)
+	mux.Handle("GET /v1/repositories/{repository_id}/settings", settingsHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/settings", settingsHandler)
+	mux.Handle("POST /v1/repositories/{repository_id}/settings/archive", settingsHandler)
 
 	mrHandler := mr.New(review, imports, sessions)
 	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
