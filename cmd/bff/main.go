@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	agentv1 "github.com/gitfrok/bff/gen/proto/agent/v1"
 	auditv1 "github.com/gitfrok/bff/gen/proto/audit/v1"
 	civ1 "github.com/gitfrok/bff/gen/proto/ci/v1"
 	codereviewv1 "github.com/gitfrok/bff/gen/proto/codereview/v1"
@@ -26,6 +27,7 @@ import (
 	"github.com/gitfrok/bff/internal/audit"
 	"github.com/gitfrok/bff/internal/browser"
 	"github.com/gitfrok/bff/internal/codereview"
+	"github.com/gitfrok/bff/internal/fleet"
 	"github.com/gitfrok/bff/internal/handlers"
 	"github.com/gitfrok/bff/internal/identity"
 	"github.com/gitfrok/bff/internal/login"
@@ -65,6 +67,10 @@ const (
 	// Unset means the usage view surface is not mounted: the control plane's
 	// usage door is itself optional (GITFROK_USAGE_GRPC_ADDR over there).
 	usageAddrEnv = "GITFROK_USAGE_ADDR"
+	// fleetAddrEnv names the control plane door serving agent/v1's FleetReader —
+	// the admin area's fleet report (SPEC-0058). Unset means the report reads
+	// unavailable, which is a different statement from an empty fleet.
+	fleetAddrEnv = "GITFROK_FLEET_ADDR"
 )
 
 // decisionTTL bounds how long a cached decision may be reused.
@@ -206,6 +212,28 @@ func main() {
 		fmt.Fprintf(os.Stderr, "%s is not set: the usage view surface is not mounted\n", usageAddrEnv)
 	}
 
+	// The admin area's fleet report (T-0072, SPEC-0058). Its own control-plane
+	// address, so a deployment may serve one without the other — and so a BFF that
+	// was not given the address answers "unavailable" rather than reporting an empty
+	// fleet, which would tell an administrator their tenant has no data planes.
+	//
+	// A nil client is the unconfigured door and refuses every call, which is why the
+	// handler is mounted either way: the surface says the report is unavailable
+	// rather than 404-ing the whole admin destination.
+	var fleetClient *fleet.Client
+	if fleetAddr := os.Getenv(fleetAddrEnv); fleetAddr != "" {
+		fleetConn, err := grpc.NewClient(fleetAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot reach the fleet reader at %s: %v\n", fleetAddr, err)
+			os.Exit(1)
+		}
+		defer func() { _ = fleetConn.Close() }()
+		fleetClient = fleet.New(agentv1.NewFleetReaderClient(fleetConn))
+	} else {
+		fmt.Fprintf(os.Stderr, "%s is not set: the admin area's fleet report reads unavailable\n", fleetAddrEnv)
+		fleetClient = fleet.New(nil)
+	}
+
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
@@ -258,6 +286,9 @@ func main() {
 	mux.Handle("GET /v1/repositories/{repository_id}/settings", settingsHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/settings", settingsHandler)
 	mux.Handle("POST /v1/repositories/{repository_id}/settings/archive", settingsHandler)
+	// The admin area's fleet report (T-0072, SPEC-0058). One read, no audit route
+	// beside it: the trail is reached through a grant, not through a role.
+	mux.Handle("GET /v1/admin/fleet", handlers.NewFleet(fleetClient, sessions))
 
 	mrHandler := mr.New(review, imports, sessions)
 	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
