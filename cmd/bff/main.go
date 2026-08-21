@@ -17,6 +17,7 @@ import (
 	civ1 "github.com/gitfrok/bff/gen/proto/ci/v1"
 	codereviewv1 "github.com/gitfrok/bff/gen/proto/codereview/v1"
 	identityv1 "github.com/gitfrok/bff/gen/proto/identity/v1"
+	notificationsv1 "github.com/gitfrok/bff/gen/proto/notifications/v1"
 	policyv1 "github.com/gitfrok/bff/gen/proto/policy/v1"
 	releasev1 "github.com/gitfrok/bff/gen/proto/release/v1"
 	repositoryv1 "github.com/gitfrok/bff/gen/proto/repository/v1"
@@ -32,6 +33,7 @@ import (
 	"github.com/gitfrok/bff/internal/identity"
 	"github.com/gitfrok/bff/internal/login"
 	"github.com/gitfrok/bff/internal/mr"
+	"github.com/gitfrok/bff/internal/notifications"
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/pipelines"
@@ -156,6 +158,10 @@ func main() {
 
 	// Code Review (served by the data plane) shapes the MR surface.
 	review := codereview.New(codereviewv1.NewMergeRequestServiceClient(pdpConn))
+	// Notifications (T-0080, SPEC-0063): the bell's read surface. Same door,
+	// same session-verified context; the recipient IS the caller.
+	notificationsHandler := handlers.NewNotifications(
+		notifications.New(notificationsv1.NewNotificationServiceClient(pdpConn)), sessions)
 
 	// Code Search (served by the data plane) shapes the search surface. The
 	// backend is the PDP for search.read and search.index.status.read; this
@@ -310,6 +316,8 @@ func main() {
 	policyReads := handlers.NewPolicy(policyview.New(policyv1.NewPolicyDecisionPointClient(pdpConn)), sessions)
 	mux.Handle("GET /api/v1/policy/bundle", policyReads)
 	mux.Handle("GET /api/v1/policy/decisions/{decision_id}", policyReads)
+	mux.Handle("/v1/notifications", notificationsHandler.Routes())
+	mux.Handle("POST /v1/notifications/{notification_id}/mark_read", notificationsHandler.Routes())
 	mux.Handle("GET /api/v1/pipelines/runs", handlers.NewPipelines(
 		pipelines.New(civ1.NewCIJobServiceClient(pdpConn)), sessions))
 	mux.Handle("POST /api/v1/search/query", searchHandler)
