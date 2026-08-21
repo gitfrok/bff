@@ -32,9 +32,11 @@ type Session interface {
 // request's own fields.
 type MergeRequests interface {
 	Get(context.Context, aggregate.ReadContext, string) (*codereview.MergeRequest, error)
-	Create(context.Context, aggregate.ReadContext, string, string, string, string) (*codereview.MergeRequest, error)
+	Create(context.Context, aggregate.ReadContext, string, string, string, string, bool) (*codereview.MergeRequest, error)
 	SubmitReview(context.Context, aggregate.ReadContext, string, string, string, string, int64) (*codereview.MergeRequest, error)
 	Merge(context.Context, aggregate.ReadContext, string, int64) (*codereview.MergeRequest, error)
+	// MarkReady moves a DRAFT merge request to OPEN (ADR-0087, SPEC-0064).
+	MarkReady(context.Context, aggregate.ReadContext, string, int64) (*codereview.MergeRequest, error)
 	// LinkExternalIssue and UnlinkExternalIssue reference an issue in the customer's
 	// own tracker (SPEC-0059). They are on this port because a reference is a
 	// property of a merge request — there is no issue surface for them to belong to,
@@ -92,6 +94,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", h.get)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests", h.create)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", h.review)
+	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/ready", h.ready)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", h.merge)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues", h.linkExternalIssue)
 	mux.HandleFunc("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues/unlink", h.unlinkExternalIssue)
@@ -139,7 +142,8 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	read.RequestID = newRequestID()
 	mr, err := h.client.Create(r.Context(), read,
 		r.PostFormValue("source_ref"), r.PostFormValue("target_ref"),
-		r.PostFormValue("title"), r.PostFormValue("description"))
+		r.PostFormValue("title"), r.PostFormValue("description"),
+		r.PostFormValue("draft") == "on" || r.PostFormValue("draft") == "true")
 	if err != nil {
 		denied(w)
 		return
@@ -167,6 +171,34 @@ func (h *Handler) review(w http.ResponseWriter, r *http.Request) {
 	mr, err := h.client.SubmitReview(r.Context(), read,
 		r.PathValue("merge_request_id"), r.PostFormValue("disposition"),
 		r.PostFormValue("comment"), r.PostFormValue("head_revision"), version)
+	if err != nil {
+		denied(w)
+		return
+	}
+	writeJSON(w, viewOf(mr))
+}
+
+// ready marks a draft ready for review (ADR-0087, SPEC-0064). Same shape as
+// merge: the expected version travels with the form; the state machine is the
+// backend's decision.
+func (h *Handler) ready(w http.ResponseWriter, r *http.Request) {
+	read, ok := h.session.ReadContext(r)
+	if !ok || read.TenantID == "" || read.ActorID == "" {
+		denied(w)
+		return
+	}
+	read.RepositoryID = r.PathValue("repository_id")
+	if err := r.ParseForm(); err != nil {
+		denied(w)
+		return
+	}
+	read.RequestID = newRequestID()
+	version, err := strconv.ParseInt(r.PostFormValue("expected_version"), 10, 64)
+	if err != nil {
+		denied(w)
+		return
+	}
+	mr, err := h.client.MarkReady(r.Context(), read, r.PathValue("merge_request_id"), version)
 	if err != nil {
 		denied(w)
 		return

@@ -73,14 +73,15 @@ func (c *Client) contextOf(read aggregate.ReadContext) *codereviewv1.ReviewComma
 	}
 }
 
-// Create opens a merge request.
-func (c *Client) Create(ctx context.Context, read aggregate.ReadContext, sourceRef, targetRef, title, description string) (*MergeRequest, error) {
+// Create opens a merge request, optionally as a draft (ADR-0087, SPEC-0064).
+func (c *Client) Create(ctx context.Context, read aggregate.ReadContext, sourceRef, targetRef, title, description string, draft bool) (*MergeRequest, error) {
 	response, err := c.service.CreateMergeRequest(ctx, &codereviewv1.CreateMergeRequestRequest{
 		Context:     c.contextOf(read),
 		SourceRef:   sourceRef,
 		TargetRef:   targetRef,
 		Title:       title,
 		Description: description,
+		Draft:       draft,
 	})
 	if err != nil {
 		return nil, err
@@ -119,6 +120,20 @@ func (c *Client) SubmitReview(ctx context.Context, read aggregate.ReadContext, m
 // Merge completes a merge request through the backend's Repository/Git path.
 func (c *Client) Merge(ctx context.Context, read aggregate.ReadContext, mergeRequestID string, expectedVersion int64) (*MergeRequest, error) {
 	response, err := c.service.MergeMergeRequest(ctx, &codereviewv1.MergeMergeRequestRequest{
+		Context:         c.contextOf(read),
+		MergeRequestId:  mergeRequestID,
+		ExpectedVersion: expectedVersion,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return shape(response.GetMergeRequest()), nil
+}
+
+// MarkReady moves a DRAFT merge request to OPEN (ADR-0087, SPEC-0064). Pure
+// passthrough: the draft state machine is the backend's decision entirely.
+func (c *Client) MarkReady(ctx context.Context, read aggregate.ReadContext, mergeRequestID string, expectedVersion int64) (*MergeRequest, error) {
+	response, err := c.service.MarkMergeRequestReady(ctx, &codereviewv1.MarkMergeRequestReadyRequest{
 		Context:         c.contextOf(read),
 		MergeRequestId:  mergeRequestID,
 		ExpectedVersion: expectedVersion,

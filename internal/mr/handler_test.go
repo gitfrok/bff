@@ -31,6 +31,10 @@ func session() stubSession {
 type stubClient struct {
 	mr  *codereview.MergeRequest
 	err error
+	// What the create and ready routes forwarded (ADR-0087, SPEC-0064).
+	createdDraft bool
+	readyID      string
+	readyVersion int64
 	// What the external-issue routes forwarded (SPEC-0059).
 	linked     codereview.ExternalIssue
 	unlinked   codereview.ExternalIssue
@@ -42,8 +46,13 @@ func (s *stubClient) Get(_ context.Context, _ aggregate.ReadContext, _ string) (
 	return s.mr, s.err
 }
 
-func (s *stubClient) Create(_ context.Context, _ aggregate.ReadContext, _, _, title, _ string) (*codereview.MergeRequest, error) {
-	return &codereview.MergeRequest{MergeRequestID: "mr-1", Title: title, State: "OPEN", Version: 1, CreatedAt: time.Now()}, s.err
+func (s *stubClient) Create(_ context.Context, _ aggregate.ReadContext, _, _, title, _ string, draft bool) (*codereview.MergeRequest, error) {
+	s.createdDraft = draft
+	state := "OPEN"
+	if draft {
+		state = "MERGE_REQUEST_STATE_DRAFT"
+	}
+	return &codereview.MergeRequest{MergeRequestID: "mr-1", Title: title, State: state, Version: 1, CreatedAt: time.Now()}, s.err
 }
 
 func (s *stubClient) SubmitReview(_ context.Context, _ aggregate.ReadContext, _, _, _, _ string, _ int64) (*codereview.MergeRequest, error) {
@@ -51,6 +60,11 @@ func (s *stubClient) SubmitReview(_ context.Context, _ aggregate.ReadContext, _,
 }
 
 func (s *stubClient) Merge(_ context.Context, _ aggregate.ReadContext, _ string, _ int64) (*codereview.MergeRequest, error) {
+	return s.mr, s.err
+}
+
+func (s *stubClient) MarkReady(_ context.Context, _ aggregate.ReadContext, mergeRequestID string, expectedVersion int64) (*codereview.MergeRequest, error) {
+	s.readyID, s.readyVersion = mergeRequestID, expectedVersion
 	return s.mr, s.err
 }
 
@@ -122,5 +136,45 @@ func TestClientRefusalIsCoarse(t *testing.T) {
 	response := serve(t, session(), c, http.MethodGet, "/v1/repositories/repo-a/merge_requests/mr-1")
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", response.Code)
+	}
+}
+
+// The create route forwards the draft flag (ADR-0087, SPEC-0064): checked-on
+// means DRAFT, absent means OPEN exactly as before.
+func TestCreateForwardsTheDraftFlag(t *testing.T) {
+	sess := session()
+	for _, tc := range []struct{ form, want string }{
+		{"source_ref=refs/heads/topic&target_ref=refs/heads/main&title=T&draft=on", "MERGE_REQUEST_STATE_DRAFT"},
+		{"source_ref=refs/heads/topic&target_ref=refs/heads/main&title=T", "OPEN"},
+	} {
+		c := &stubClient{}
+		recorder := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/repositories/repo-a/merge_requests", strings.NewReader(tc.form))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		New(c, nil, sess).Routes().ServeHTTP(recorder, req)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("create status = %d", recorder.Code)
+		}
+		if !strings.Contains(recorder.Body.String(), tc.want) {
+			t.Fatalf("draft=%q: body = %s, want state %s", tc.form, recorder.Body.String(), tc.want)
+		}
+		if c.createdDraft != (tc.want == "MERGE_REQUEST_STATE_DRAFT") {
+			t.Fatalf("draft flag forwarded as %v for %q", c.createdDraft, tc.form)
+		}
+	}
+}
+
+// The ready route forwards the ID and expected version, shaped like merge.
+func TestReadyRouteForwards(t *testing.T) {
+	c := &stubClient{mr: &codereview.MergeRequest{MergeRequestID: "mr-9", State: "OPEN", Version: 4}}
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/repositories/repo-a/merge_requests/mr-9/ready", strings.NewReader("expected_version=3"))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	New(c, nil, session()).Routes().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("ready status = %d", recorder.Code)
+	}
+	if c.readyID != "mr-9" || c.readyVersion != 3 {
+		t.Fatalf("ready forwarded id=%q version=%d", c.readyID, c.readyVersion)
 	}
 }
