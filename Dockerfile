@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # T-0021 / ADR-0035: BFF ships from scratch with no shell or package manager.
-FROM docker.io/library/golang:1.26.0-alpine3.22 AS build
+FROM docker.io/library/golang:1.27.0-alpine3.23 AS build
 
 WORKDIR /src
 COPY go.mod go.sum ./
