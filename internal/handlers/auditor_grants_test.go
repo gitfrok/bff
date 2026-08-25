@@ -148,6 +148,43 @@ func TestRevokeGrantShapesRevokedGrant(t *testing.T) {
 	}
 }
 
+// An unrevoked grant carries no revocation instant on the wire. `omitempty`
+// never omitted a struct, so the zero time.Time used to serialise as
+// "0001-01-01T00:00:00Z" — and the browser's `grant.revoked_at &&` guard reads
+// any non-empty string as a revocation, so every active grant rendered a
+// "Revoked 0001-01-01" row (SPEC-0051 AC3, which renders the instant only
+// "when it was revoked if it was"). The field must be absent, not zero.
+func TestGrantViewOmitsRevokedAtWhileUnrevoked(t *testing.T) {
+	from := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)
+	gr := &stubGrants{grants: []identity.Grant{
+		{GrantID: "grant-1", AuditorPrincipalID: "p-auditor", RangeFrom: from, State: identity.GrantActive},
+	}}
+	response := serveGrants(t, NewAuditorGrants(gr, session()), http.MethodGet, "/api/v1/audit/auditor-grants", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if body := response.Body.String(); strings.Contains(body, "revoked_at") {
+		t.Fatalf("an unrevoked grant carried revoked_at on the wire: %s", body)
+	}
+}
+
+// A revoked grant still carries the instant — the fix above must not omit a
+// real revocation.
+func TestGrantViewCarriesRevokedAtWhenRevoked(t *testing.T) {
+	when := time.Date(2026, 7, 3, 12, 0, 0, 0, time.UTC)
+	gr := &stubGrants{grant: identity.Grant{
+		GrantID: "grant-1", TenantID: "tenant-a", AuditorPrincipalID: "p-auditor",
+		ExpiresAt: when.Add(time.Hour), RevokedAt: when, State: identity.GrantRevoked,
+	}}
+	response := serveGrants(t, NewAuditorGrants(gr, session()), http.MethodDelete, "/api/v1/audit/auditor-grants/grant-1", "")
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d", response.Code)
+	}
+	if body := response.Body.String(); !strings.Contains(body, `"revoked_at":"2026-07-03T12:00:00Z"`) {
+		t.Fatalf("a revoked grant lost its revocation instant: %s", body)
+	}
+}
+
 // Listing shapes every grant's scope, state and lifecycle — the server's
 // rendering of expiry included — and forwards the optional principal filter
 // (SPEC-0033 AC3).
