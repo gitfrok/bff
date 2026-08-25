@@ -82,6 +82,10 @@ const maxGrantIssueBodyBytes = 16 << 10
 // state and lifecycle only — never pack contents. The state is the server's
 // rendering of its own record at response time, never an authorization
 // outcome this surface produces (SPEC-0033 AC7).
+//
+// RevokedAt is tagged omitzero, not omitempty: omitempty has never omitted a
+// struct, so an unrevoked grant used to carry "0001-01-01T00:00:00Z" where the
+// contract and the browser both expect no field at all.
 type AuditorGrantView struct {
 	GrantID            string    `json:"grant_id"`
 	TenantID           string    `json:"tenant_id"`
@@ -93,7 +97,7 @@ type AuditorGrantView struct {
 	ExpiresAt          time.Time `json:"expires_at"`
 	GrantedBy          string    `json:"granted_by"`
 	IssuedAt           time.Time `json:"issued_at"`
-	RevokedAt          time.Time `json:"revoked_at,omitempty"`
+	RevokedAt          time.Time `json:"revoked_at,omitzero"`
 	State              string    `json:"state"`
 }
 
