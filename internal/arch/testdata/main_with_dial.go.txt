@@ -1,0 +1,14 @@
+package main
+
+func compose() {
+	mux := newMux()
+
+	// THE ROUTE PARTITION (fixture)
+	if cfg.IsControl() {
+		mux.Handle("GET /api/v1/usage/view", usageHandler)
+		// A control-plane registration that reaches the data plane. This is the defect.
+		mux.Handle("/v1/repositories/", browser.New(reader, sessions, dataConn).Routes())
+	} else {
+		mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
+	}
+}

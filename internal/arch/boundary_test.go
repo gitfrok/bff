@@ -240,3 +240,8 @@ func hasRule(vs []Violation, rule string) bool {
 	}
 	return false
 }
+
+// writeFile is a test helper for rules that need a file rather than a fixture package.
+func writeFile(path, body string) error {
+	return os.WriteFile(path, []byte(body), 0o600)
+}
