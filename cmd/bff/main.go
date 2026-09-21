@@ -37,6 +37,7 @@ import (
 	"github.com/gitfrok/bff/internal/oidc"
 	"github.com/gitfrok/bff/internal/pep"
 	"github.com/gitfrok/bff/internal/pipelines"
+	"github.com/gitfrok/bff/internal/plane"
 	"github.com/gitfrok/bff/internal/policyview"
 	"github.com/gitfrok/bff/internal/releases"
 	"github.com/gitfrok/bff/internal/reposettings"
@@ -87,17 +88,20 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	pdpAddr := os.Getenv(pdpAddrEnv)
-	if pdpAddr == "" {
-		fmt.Fprintf(os.Stderr, "%s is not set: without a PDP the BFF cannot authorize anything, "+
-			"and it must not serve requests it cannot check (ADR-0006, invariant 2)\n", pdpAddrEnv)
+	// Which plane this deployment serves, and the two refusals that enforce it (ADR-0094 decision 5,
+	// SPEC-0070). A control-plane deployment refuses to start WITH a RepositoryReader address; a
+	// data-plane one refuses WITHOUT one. The refusal is the enforcement: a misconfigured deployment
+	// fails here, where an operator sees it, rather than serving a route it should not have.
+	cfg, err := plane.Resolve(os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	readerAddr := os.Getenv(readerAddrEnv)
-	if readerAddr == "" {
-		fmt.Fprintf(os.Stderr, "%s is not set: without RepositoryReader the browser has no data to show\n", readerAddrEnv)
-		os.Exit(1)
+	if cfg.UsedLegacyDataplaneName {
+		fmt.Fprintf(os.Stderr, "warning: %s is deprecated; use %s (ADR-0100 decision 5, accepted for one release)\n",
+			plane.LegacyDataplaneAddrEnv, plane.DataplaneAddrEnv)
 	}
+
 	listenAddr := os.Getenv(listenAddrEnv)
 	if listenAddr == "" {
 		fmt.Fprintf(os.Stderr, "%s is not set: the BFF must serve somewhere\n", listenAddrEnv)
@@ -106,21 +110,52 @@ func main() {
 
 	// Insecure credentials are the dev posture. mTLS between planes is T-0013's, and this line is
 	// where it lands — not a decision deferred silently, but one this file names.
-	pdpConn, err := grpc.NewClient(pdpAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot reach the PDP at %s: %v\n", pdpAddr, err)
-		os.Exit(1)
+	// dataConn is the data plane's single gRPC door (ADR-0041) and exists ONLY on a data-plane
+	// deployment. On the control plane it is nil — there is no address to dial, which is how
+	// ADR-0011's no-dial rule becomes structural rather than asserted (ADR-0100 decision 6).
+	var dataConn *grpc.ClientConn
+	if cfg.DataplaneAddr != "" {
+		dataConn, err = grpc.NewClient(cfg.DataplaneAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot reach the data plane at %s: %v\n", cfg.DataplaneAddr, err)
+			os.Exit(1)
+		}
+		defer func() { _ = dataConn.Close() }()
 	}
-	defer func() { _ = pdpConn.Close() }()
 
-	readerConn, err := grpc.NewClient(readerAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "cannot reach RepositoryReader at %s: %v\n", readerAddr, err)
-		os.Exit(1)
+	// ctrlConn is the control plane's BFF door — PolicyDecisionPoint, EvidenceService and
+	// AuditorGrantService, registered by T-0088. Only a control-plane deployment has it.
+	var ctrlConn *grpc.ClientConn
+	if cfg.ControlplaneAddr != "" {
+		ctrlConn, err = grpc.NewClient(cfg.ControlplaneAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot reach the control plane at %s: %v\n", cfg.ControlplaneAddr, err)
+			os.Exit(1)
+		}
+		defer func() { _ = ctrlConn.Close() }()
 	}
-	defer func() { _ = readerConn.Close() }()
 
-	enforcer := pep.New(policyv1.NewPolicyDecisionPointClient(pdpConn), pep.Options{TTL: decisionTTL})
+	// metaConn serves the four services ADR-0100 decision 1 moved control-plane-side. Both planes
+	// need them — each authorizes its own requests, writes its own trail and reads its own grants —
+	// and ADR-0101 decision 2 makes those schemas bi-planar precisely so each has its own instance.
+	// So the handlers built on it are identical in both deployments; only the door differs.
+	metaConn := dataConn
+	if cfg.IsControl() {
+		metaConn = ctrlConn
+	}
+
+	// readerConn is git-storaged, and exists only where repository content is served.
+	var readerConn *grpc.ClientConn
+	if cfg.ReaderAddr != "" {
+		readerConn, err = grpc.NewClient(cfg.ReaderAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "cannot reach RepositoryReader at %s: %v\n", cfg.ReaderAddr, err)
+			os.Exit(1)
+		}
+		defer func() { _ = readerConn.Close() }()
+	}
+
+	enforcer := pep.New(policyv1.NewPolicyDecisionPointClient(metaConn), pep.Options{TTL: decisionTTL})
 	_ = enforcer
 
 	// The session store. ADR-0049 decision 5 names Valkey and ADR-0052 permits this process to open
@@ -157,18 +192,18 @@ func main() {
 	reader := aggregate.NewRepositoryReader(repositoryreader.New(repositoryv1.NewRepositoryReaderClient(readerConn)))
 
 	// Code Review (served by the data plane) shapes the MR surface.
-	review := codereview.New(codereviewv1.NewMergeRequestServiceClient(pdpConn))
+	review := codereview.New(codereviewv1.NewMergeRequestServiceClient(dataConn))
 	// Notifications (T-0080, SPEC-0063): the bell's read surface. Same door,
 	// same session-verified context; the recipient IS the caller.
 	notificationsHandler := handlers.NewNotifications(
-		notifications.New(notificationsv1.NewNotificationServiceClient(pdpConn)), sessions)
+		notifications.New(notificationsv1.NewNotificationServiceClient(dataConn)), sessions)
 
 	// Code Search (served by the data plane) shapes the search surface. The
 	// backend is the PDP for search.read and search.index.status.read; this
 	// handler forwards the session's verified identity and shapes only, its
 	// one addition being the RepositoryReader metadata joined onto each
 	// authorized match (SPEC-0034, SPEC-0035, T-0028).
-	searchHandler := handlers.NewSearch(search.New(searchv1.NewSearchServiceClient(pdpConn)), reader, sessions)
+	searchHandler := handlers.NewSearch(search.New(searchv1.NewSearchServiceClient(dataConn)), reader, sessions)
 
 	// Security/Findings (served by the data plane) shapes the unified
 	// security dashboard surface. The backend is the PDP for findings.read,
@@ -178,7 +213,7 @@ func main() {
 	// (SPEC-0026, SPEC-0027, T-0023). The MR findings route serves the same
 	// surface: attribution is the backend's derived state, never computed
 	// here (SPEC-0028, T-0024).
-	securityHandler := handlers.NewSecurity(security.New(securityv1.NewFindingsServiceClient(pdpConn)), sessions)
+	securityHandler := handlers.NewSecurity(security.New(securityv1.NewFindingsServiceClient(dataConn)), sessions)
 
 	// Audit (served by the data plane) shapes the date-ranged evidence pack
 	// surface. The backend is the PDP for evidence.pack.generate and
@@ -186,7 +221,7 @@ func main() {
 	// audited; this handler forwards the session's verified identity and
 	// shapes only, streaming each bounded pack chunk as it arrives
 	// (SPEC-0031, SPEC-0032, T-0026).
-	evidenceHandler := handlers.NewEvidence(audit.New(auditv1.NewEvidenceServiceClient(pdpConn)), sessions)
+	evidenceHandler := handlers.NewEvidence(audit.New(auditv1.NewEvidenceServiceClient(metaConn)), sessions)
 
 	// Identity & Access (served by the data plane) shapes the auditor grant
 	// administration surface. The backend is the PDP for auditor.grant.manage:
@@ -194,7 +229,7 @@ func main() {
 	// action is itself audited, and grant state is a fact the backend reads at
 	// decision time; this handler forwards the session's verified identity and
 	// shapes only (SPEC-0033, T-0027).
-	grantsHandler := handlers.NewAuditorGrants(identity.New(identityv1.NewAuditorGrantServiceClient(pdpConn)), sessions)
+	grantsHandler := handlers.NewAuditorGrants(identity.New(identityv1.NewAuditorGrantServiceClient(metaConn)), sessions)
 
 	// Usage (served by the control plane) shapes the fair-use usage view.
 	// The backend is the metering authority and the PDP for usage.view.read
@@ -243,10 +278,10 @@ func main() {
 	// Imported review history (SPEC-0011) is read through the same door. It is a
 	// separate service in the contracts, and stays a separate client here: the
 	// two must never be shaped into one list the page cannot take apart.
-	imports := codereview.NewImportClient(codereviewv1.NewImportServiceClient(pdpConn))
+	imports := codereview.NewImportClient(codereviewv1.NewImportServiceClient(dataConn))
 
 	// OIDC login (served by the data plane's Identity&Access).
-	auth := oidc.New(identityv1.NewOIDCLoginClient(pdpConn))
+	auth := oidc.New(identityv1.NewOIDCLoginClient(metaConn))
 	loginConfig := login.Config{
 		Issuer:      os.Getenv(oidcIssuerEnv),
 		ClientID:    os.Getenv(oidcClientIDEnv),
@@ -265,77 +300,95 @@ func main() {
 	// handler's routes are registered directly so they coexist with the
 	// browser prefix instead of conflicting with it.
 	mux := http.NewServeMux()
-	mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
-	// The repository LIST, on /v1/repositories with no trailing slash. It is a
-	// distinct pattern from the browser prefix above, which matches
-	// /v1/repositories/... — a list names no repository, so it sits one level
-	// up (T-0054, SPEC-0052).
-	mux.Handle("GET /v1/repositories", handlers.NewRepositories(
-		repositoryregistry.New(repositoryv1.NewRepositoryRegistryClient(pdpConn)), sessions))
-	// Releases: tags, and the records announced against them (T-0065, SPEC-0056).
-	// There is deliberately no artifact route beside these — ADR-0075 accepted
-	// tags and notes only.
-	releaseHandler := handlers.NewReleases(
-		releases.New(releasev1.NewReleaseServiceClient(pdpConn), repositoryv1.NewRepositoryReaderClient(readerConn)),
-		sessions)
-	mux.Handle("GET /v1/repositories/{repository_id}/tags", releaseHandler)
-	mux.Handle("GET /v1/repositories/{repository_id}/releases", releaseHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/releases", releaseHandler)
-	mux.Handle("GET /v1/repositories/{repository_id}/releases/{tag}", releaseHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/releases/{tag}/notes", releaseHandler)
-	// Repository settings: name, description and the archived label (T-0069, SPEC-0057). There is
-	// deliberately no visibility route, no members route and no delete route — ADR-0076 accepted
-	// name, description and archival only, and a door that exists and refuses is a promise nobody
-	// has made.
-	settingsHandler := handlers.NewRepoSettings(
-		reposettings.New(repositoryv1.NewRepositorySettingsClient(pdpConn)), sessions)
-	mux.Handle("GET /v1/repositories/{repository_id}/settings", settingsHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/settings", settingsHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/settings/archive", settingsHandler)
-	// The admin area's fleet report (T-0072, SPEC-0058). One read, no audit route
-	// beside it: the trail is reached through a grant, not through a role.
-	mux.Handle("GET /v1/admin/fleet", handlers.NewFleet(fleetClient, sessions))
 
-	mrHandler := mr.New(review, imports, sessions)
-	mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
-	// Referencing an issue in the customer's own tracker (T-0075, SPEC-0059). Two
-	// writes and no read of its own: the reference travels on the merge request,
-	// because there is no issue surface for it to belong to.
-	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues", mrHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues/unlink", mrHandler)
-	mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
-	mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
-	// The pipeline runs list (T-0060, SPEC-0054). There is deliberately no log
-	// route beside it: ADR-0072 defers retaining job output, and a door that
-	// exists and refuses is a promise nobody has made yet.
-	// Policy visibility (T-0062, SPEC-0055). Reads only, and there is no write
-	// route beside them: ADR-0073 records that authoring is structurally absent,
-	// and a route that accepts a policy and refuses it would be a promise.
-	policyReads := handlers.NewPolicy(policyview.New(policyv1.NewPolicyDecisionPointClient(pdpConn)), sessions)
-	mux.Handle("GET /api/v1/policy/bundle", policyReads)
-	mux.Handle("GET /api/v1/policy/decisions/{decision_id}", policyReads)
-	mux.Handle("/v1/notifications", notificationsHandler.Routes())
-	mux.Handle("POST /v1/notifications/{notification_id}/mark_read", notificationsHandler.Routes())
-	mux.Handle("GET /api/v1/pipelines/runs", handlers.NewPipelines(
-		pipelines.New(civ1.NewCIJobServiceClient(pdpConn)), sessions))
-	mux.Handle("POST /api/v1/search/query", searchHandler)
-	mux.Handle("GET /api/v1/search/status", searchHandler)
-	mux.Handle("POST /api/v1/security/triage", securityHandler)
-	mux.Handle("GET /api/v1/security/findings/summary", securityHandler)
-	mux.Handle("GET /api/v1/security/dashboard", securityHandler)
-	mux.Handle("GET /api/v1/security/merge-requests/{merge_request_id}/findings", securityHandler)
-	mux.Handle("POST /api/v1/audit/evidence-packs", evidenceHandler)
-	mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}/status", evidenceHandler)
-	mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}", evidenceHandler)
-	mux.Handle("POST /api/v1/audit/auditor-grants", grantsHandler)
-	mux.Handle("DELETE /api/v1/audit/auditor-grants/{grant_id}", grantsHandler)
-	mux.Handle("GET /api/v1/audit/auditor-grants", grantsHandler)
-	if usageHandler != nil {
-		mux.Handle("GET /api/v1/usage/view", usageHandler)
+	// THE ROUTE PARTITION (SPEC-0070 AC5/AC6, ADR-0094 decisions 3 and 4).
+	//
+	// A deployment serves one plane's routes and nothing of the other's, so the other's paths fall
+	// through to a coarse 404. Not a redirect: a control-plane 404 for a repository path must not
+	// disclose that a data-plane door exists, let alone where.
+	//
+	// The handlers are already partitioned by connection above — the services ADR-0100 decision 1
+	// moved control-plane-side follow metaConn and are identical in both deployments, while
+	// everything repository-shaped needs dataConn or readerConn, which a control-plane deployment
+	// does not have. This is where that becomes a served surface rather than a wiring detail.
+	if cfg.IsControl() {
+		// ADR-0094 decision 4: identity and login, billing and usage, policy visibility, audit and
+		// evidence packs, auditor grants, the fleet report. Nothing that reads a repository.
+		// The admin area's fleet report (T-0072, SPEC-0058). One read, no audit route
+		// beside it: the trail is reached through a grant, not through a role.
+		mux.Handle("GET /v1/admin/fleet", handlers.NewFleet(fleetClient, sessions))
+		// The pipeline runs list (T-0060, SPEC-0054). There is deliberately no log
+		// route beside it: ADR-0072 defers retaining job output, and a door that
+		// exists and refuses is a promise nobody has made yet.
+		// Policy visibility (T-0062, SPEC-0055). Reads only, and there is no write
+		// route beside them: ADR-0073 records that authoring is structurally absent,
+		// and a route that accepts a policy and refuses it would be a promise.
+		policyReads := handlers.NewPolicy(policyview.New(policyv1.NewPolicyDecisionPointClient(metaConn)), sessions)
+		mux.Handle("GET /api/v1/policy/bundle", policyReads)
+		mux.Handle("GET /api/v1/policy/decisions/{decision_id}", policyReads)
+		mux.Handle("POST /api/v1/audit/evidence-packs", evidenceHandler)
+		mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}/status", evidenceHandler)
+		mux.Handle("GET /api/v1/audit/evidence-packs/{pack_id}", evidenceHandler)
+		mux.Handle("POST /api/v1/audit/auditor-grants", grantsHandler)
+		mux.Handle("DELETE /api/v1/audit/auditor-grants/{grant_id}", grantsHandler)
+		mux.Handle("GET /api/v1/audit/auditor-grants", grantsHandler)
+		if usageHandler != nil {
+			mux.Handle("GET /api/v1/usage/view", usageHandler)
+		}
+		mux.Handle("/", loginHandler.Routes())
+	} else {
+		// ADR-0094 decision 3 plus ADR-0100 decisions 2 and 3: the repository surface, and the
+		// repository list, settings, releases and notifications that ADR-0100 settled data-side.
+		mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
+		// The repository LIST, on /v1/repositories with no trailing slash. It is a
+		// distinct pattern from the browser prefix above, which matches
+		// /v1/repositories/... — a list names no repository, so it sits one level
+		// up (T-0054, SPEC-0052).
+		mux.Handle("GET /v1/repositories", handlers.NewRepositories(
+			repositoryregistry.New(repositoryv1.NewRepositoryRegistryClient(dataConn)), sessions))
+		// Releases: tags, and the records announced against them (T-0065, SPEC-0056).
+		// There is deliberately no artifact route beside these — ADR-0075 accepted
+		// tags and notes only.
+		releaseHandler := handlers.NewReleases(
+			releases.New(releasev1.NewReleaseServiceClient(dataConn), repositoryv1.NewRepositoryReaderClient(readerConn)),
+			sessions)
+		mux.Handle("GET /v1/repositories/{repository_id}/tags", releaseHandler)
+		mux.Handle("GET /v1/repositories/{repository_id}/releases", releaseHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/releases", releaseHandler)
+		mux.Handle("GET /v1/repositories/{repository_id}/releases/{tag}", releaseHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/releases/{tag}/notes", releaseHandler)
+		// Repository settings: name, description and the archived label (T-0069, SPEC-0057). There is
+		// deliberately no visibility route, no members route and no delete route — ADR-0076 accepted
+		// name, description and archival only, and a door that exists and refuses is a promise nobody
+		// has made.
+		settingsHandler := handlers.NewRepoSettings(
+			reposettings.New(repositoryv1.NewRepositorySettingsClient(dataConn)), sessions)
+		mux.Handle("GET /v1/repositories/{repository_id}/settings", settingsHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/settings", settingsHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/settings/archive", settingsHandler)
+
+		mrHandler := mr.New(review, imports, sessions)
+		mux.Handle("GET /v1/repositories/{repository_id}/merge_requests/{merge_request_id}", mrHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/merge_requests", mrHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/review", mrHandler)
+		// Referencing an issue in the customer's own tracker (T-0075, SPEC-0059). Two
+		// writes and no read of its own: the reference travels on the merge request,
+		// because there is no issue surface for it to belong to.
+		mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues", mrHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/external_issues/unlink", mrHandler)
+		mux.Handle("POST /v1/repositories/{repository_id}/merge_requests/{merge_request_id}/merge", mrHandler)
+		mux.Handle("GET /v1/repositories/{repository_id}/imports/{import_id}/history", mrHandler)
+		mux.Handle("/v1/notifications", notificationsHandler.Routes())
+		mux.Handle("POST /v1/notifications/{notification_id}/mark_read", notificationsHandler.Routes())
+		mux.Handle("GET /api/v1/pipelines/runs", handlers.NewPipelines(
+			pipelines.New(civ1.NewCIJobServiceClient(dataConn)), sessions))
+		mux.Handle("POST /api/v1/search/query", searchHandler)
+		mux.Handle("GET /api/v1/search/status", searchHandler)
+		mux.Handle("POST /api/v1/security/triage", securityHandler)
+		mux.Handle("GET /api/v1/security/findings/summary", securityHandler)
+		mux.Handle("GET /api/v1/security/dashboard", securityHandler)
+		mux.Handle("GET /api/v1/security/merge-requests/{merge_request_id}/findings", securityHandler)
 	}
-	mux.Handle("/", loginHandler.Routes())
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
@@ -352,7 +405,14 @@ func main() {
 		_ = server.Shutdown(shutdown)
 	})
 
-	fmt.Printf("gitfrok bff: PDP on %s, RepositoryReader on %s, serving %s\n", pdpAddr, readerAddr, listenAddr)
+	// The plane comes first, because it is the fact that determines which routes exist.
+	if cfg.IsControl() {
+		fmt.Printf("gitfrok bff: CONTROL plane — metadata surfaces only, control-plane door %s, serving %s\n",
+			cfg.ControlplaneAddr, listenAddr)
+	} else {
+		fmt.Printf("gitfrok bff: DATA plane — repository surfaces only, data-plane door %s, RepositoryReader %s, serving %s\n",
+			cfg.DataplaneAddr, cfg.ReaderAddr, listenAddr)
+	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fmt.Fprintf(os.Stderr, "bff: %v\n", err)
 		os.Exit(1)
