@@ -113,19 +113,47 @@ func TestPlaneRouteSetsAreDisjoint(t *testing.T) {
 	}
 }
 
-// The login catch-all belongs to the control plane (ADR-0094 decision 4, and ADR-0100 decision 1
-// moves OIDCLogin there). Asserted because its absence from the data plane is what makes an
-// unmatched repository path a coarse 404 rather than a redirect into a login flow.
-func TestLoginIsControlPlaneOnly(t *testing.T) {
+// SPEC-0073 AC1/AC2/AC5 (ADR-0102): login is served on BOTH planes, but the catch-all is not.
+//
+// Until ADR-0102 the login surface was mounted only in the control-plane branch, and a data-plane
+// BFF answered 404 on /login — measured on the dev cluster on 2026-09-23, where no plane value let
+// anyone log in. ADR-0102 decision 1 has the data plane run its own login against the shared issuer,
+// through its own door's OIDCLogin.
+//
+// What must NOT change is SPEC-0070 AC5's coarse 404: the control plane mounts login as the "/"
+// catch-all, and doing the same on the data plane would turn every unmatched repository path into a
+// redirect into a login flow. So the data plane registers the three login paths by name and nothing
+// broader.
+var loginPaths = []string{"GET /login", "GET /callback", "POST /logout"}
+
+func TestLoginIsServedOnTheDataPlane(t *testing.T) {
 	t.Parallel()
 
-	control, data := planeRoutes(t)
-	if !contains(control, "/") {
-		t.Error(`the "/" login catch-all is not on the control plane; ADR-0094 decision 4 puts identity and login there`)
+	_, data := planeRoutes(t)
+	for _, p := range loginPaths {
+		if !contains(data, p) {
+			t.Errorf("the data plane does not register %q — ADR-0102 decision 1 has a data-plane "+
+				"deployment log people in through its own plane (SPEC-0073 AC1)", p)
+		}
 	}
+}
+
+func TestDataPlaneHasNoCatchAll(t *testing.T) {
+	t.Parallel()
+
+	_, data := planeRoutes(t)
 	if contains(data, "/") {
 		t.Error(`the "/" catch-all is on the data plane, so an unmatched repository path would reach a login flow ` +
-			`instead of a coarse 404 (SPEC-0070 AC5)`)
+			`instead of a coarse 404 (SPEC-0070 AC5, SPEC-0073 AC2)`)
+	}
+}
+
+func TestControlPlaneKeepsTheLoginCatchAll(t *testing.T) {
+	t.Parallel()
+
+	control, _ := planeRoutes(t)
+	if !contains(control, "/") {
+		t.Error(`the "/" login catch-all is not on the control plane; ADR-0102 decision 4 leaves the control plane's login as it was (SPEC-0073 AC5)`)
 	}
 }
 

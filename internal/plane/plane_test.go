@@ -222,3 +222,44 @@ func TestCurrentNameWinsOverLegacy(t *testing.T) {
 		t.Error("reported legacy when the current name was used")
 	}
 }
+
+// SPEC-0073 AC4 (ADR-0102 decision 5): a data-plane BFF without a durable session store must refuse
+// to start. A data-plane repository surface that forgets every user on each rollout looks healthy
+// and is not. The control plane's choice is unchanged — memory stays its dev posture.
+func TestDataPlaneRequiresValkey(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		plane  plane.Plane
+		store  string
+		refuse bool
+	}{
+		{plane.Data, "", true},
+		{plane.Data, "memory", true},
+		{plane.Data, "valkey", false},
+		{plane.Control, "", false},
+		{plane.Control, "memory", false},
+		{plane.Control, "valkey", false},
+	}
+	for _, c := range cases {
+		c := c
+		t.Run(string(c.plane)+"/"+c.store, func(t *testing.T) {
+			t.Parallel()
+			err := plane.RequireSessionStore(c.plane, c.store)
+			if c.refuse && err == nil {
+				t.Fatalf("%s plane with session store %q was accepted; ADR-0102 decision 5 requires valkey", c.plane, c.store)
+			}
+			if !c.refuse && err != nil {
+				t.Fatalf("%s plane with session store %q was refused: %v", c.plane, c.store, err)
+			}
+			if c.refuse {
+				if !errors.Is(err, plane.ErrRefused) {
+					t.Fatalf("error does not wrap ErrRefused: %v", err)
+				}
+				if !strings.Contains(err.Error(), "ADR-0102") {
+					t.Fatalf("the refusal must name ADR-0102 so an operator knows why: %v", err)
+				}
+			}
+		})
+	}
+}

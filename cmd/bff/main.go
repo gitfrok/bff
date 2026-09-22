@@ -164,6 +164,11 @@ func main() {
 	// A configured store that cannot be reached is fatal (ADR-0052 decision 4). Falling back to
 	// memory here would leave the process looking healthy while logging every user out on the next
 	// rollout, and nothing in a response would say why.
+	// ADR-0102 decision 5 (SPEC-0073 AC4): the data plane's Valkey is not optional.
+	if err := plane.RequireSessionStore(cfg.Plane, os.Getenv(sessionStoreEnv)); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	var store session.Store
 	switch mode := os.Getenv(sessionStoreEnv); mode {
 	case "valkey":
@@ -337,6 +342,16 @@ func main() {
 		}
 		mux.Handle("/", loginHandler.Routes())
 	} else {
+		// ADR-0102 decision 1 (SPEC-0073 AC1/AC2): the data plane logs people in for itself, through
+		// its OWN door — `auth` above is built on metaConn, which is the data-plane connection here,
+		// and cmd/dataplane-app registers OIDCLogin on that door. The three paths are registered by
+		// NAME: mounting the login handler as the "/" catch-all, as the control plane does, would turn
+		// every unmatched repository path into a redirect into a login flow instead of SPEC-0070 AC5's
+		// coarse 404.
+		loginRoutes := loginHandler.Routes()
+		mux.Handle("GET /login", loginRoutes)
+		mux.Handle("GET /callback", loginRoutes)
+		mux.Handle("POST /logout", loginRoutes)
 		// ADR-0094 decision 3 plus ADR-0100 decisions 2 and 3: the repository surface, and the
 		// repository list, settings, releases and notifications that ADR-0100 settled data-side.
 		mux.Handle("/v1/repositories/", browser.New(reader, sessions).Routes())
@@ -410,7 +425,7 @@ func main() {
 		fmt.Printf("gitfrok bff: CONTROL plane — metadata surfaces only, control-plane door %s, serving %s\n",
 			cfg.ControlplaneAddr, listenAddr)
 	} else {
-		fmt.Printf("gitfrok bff: DATA plane — repository surfaces only, data-plane door %s, RepositoryReader %s, serving %s\n",
+		fmt.Printf("gitfrok bff: DATA plane — repository surfaces and its own login (ADR-0102), data-plane door %s, RepositoryReader %s, serving %s\n",
 			cfg.DataplaneAddr, cfg.ReaderAddr, listenAddr)
 	}
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

@@ -156,3 +156,26 @@ func Resolve(getenv func(string) string) (Config, error) {
 
 	return cfg, nil
 }
+
+// RequireSessionStore refuses a data-plane deployment whose session store is not Valkey
+// (ADR-0102 decision 5, SPEC-0073 AC4).
+//
+// A data-plane BFF serves the repository surface to logged-in people, and ADR-0102 gives it its own
+// sessions in its own Valkey. The in-memory store there would pass every health check and then log
+// every user out on each rollout, with nothing in a response saying why. The control plane's choice
+// is unchanged: memory remains its dev posture.
+func RequireSessionStore(p Plane, store string) error {
+	if p != Data {
+		return nil
+	}
+	if strings.TrimSpace(store) == "valkey" {
+		return nil
+	}
+	shown := store
+	if strings.TrimSpace(store) == "" {
+		shown = "(unset)"
+	}
+	return fmt.Errorf("%w: %s=data needs GITFROK_SESSION_STORE=valkey, got %s. ADR-0102 decision 5: a "+
+		"data-plane deployment keeps its own sessions in its own Valkey, and a store that forgets "+
+		"every user on restart is not an acceptable fallback there", ErrRefused, PlaneEnv, shown)
+}
